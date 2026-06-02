@@ -14,104 +14,150 @@ npm run bench:ab
 Throughput uses [tinybench](https://github.com/tinylibs/tinybench) (thousands of
 samples, relative margin of error shown). Numbers are representative, not
 absolute — a laptop is thermally noisy, so only the back-to-back deltas are
-meaningful, not the raw figures.
+meaningful, not the raw figures. The **Δ** column is the improvement (↑ = faster /
+higher is better, ↓ = lower is better).
 
 > **Drop-in:** every result below is from the *default* code path with **zero
 > API or behavior changes** — same rows, same types, same `Object.prototype`.
-> Just upgrade. (Binary mode is the one opt-in piece — see
-> [`BINARY.md`](packages/pg-protocol/bench/BINARY.md).)
+> Just upgrade.
 
 ---
 
-## Parse throughput — Mrows/s (base → optimized)
+## Parse throughput — object mode (the default), Mrows/s ↑
 
-| fixture | array | object (default) |
-| --- | --- | --- |
-| `pg_type` (12 cols) | 1.129 → 1.346 (+19%) | 1.008 → 1.330 (**+32%**) |
-| `seq` (1 int col) | 8.227 → 9.343 (+14%) | 7.703 → 9.495 (+23%) |
-| `mixed` (5 cols) | 1.358 → 1.492 (+10%) | 1.266 → 1.480 (+17%) |
-| `users` (uuid/jsonb/ts/numeric) | 0.547 → 0.599 (+10%) | 0.513 → 0.614 (+20%) |
-| `orders` (numerics/enum/jsonb) | 0.793 → 0.889 (+12%) | 0.681 → 0.882 (**+30%**) |
-| `wide` (60 cols) | 0.226 → 0.271 (+20%) | 0.156 → 0.271 (**+74%**) |
-| `null_heavy` (16 cols, ~85% null) | 3.763 → 4.482 (+19%) | 1.668 → 4.665 (**+180%**) |
-| `events` (50k rows, jsonb) | 0.993 → 1.060 (+7%) | 0.890 → 1.060 (+19%) |
+| fixture | base | optimized | Δ |
+| --- | ---: | ---: | ---: |
+| `pg_type` (12 cols) | 0.993 | 1.339 | **+35%** |
+| `seq` (1 int col) | 7.636 | 9.536 | +25% |
+| `mixed` (5 cols) | 1.257 | 1.483 | +18% |
+| `users` (uuid/jsonb/ts/numeric) | 0.497 | 0.617 | +24% |
+| `orders` (numerics/enum/jsonb) | 0.667 | 0.885 | **+33%** |
+| `wide` (60 cols) | 0.154 | 0.271 | **+76%** |
+| `null_heavy` (16 cols, ~85% null) | 1.650 | 4.630 | **+181%** |
+| `events` (50k rows, jsonb) | 0.868 | 1.063 | +23% |
+
+## Parse throughput — array mode, Mrows/s ↑
+
+| fixture | base | optimized | Δ |
+| --- | ---: | ---: | ---: |
+| `pg_type` | 1.103 | 1.340 | +22% |
+| `seq` | 8.378 | 9.404 | +12% |
+| `mixed` | 1.347 | 1.490 | +11% |
+| `users` | 0.528 | 0.599 | +13% |
+| `orders` | 0.787 | 0.889 | +13% |
+| `wide` | 0.224 | 0.272 | +21% |
+| `null_heavy` | 3.694 | 4.487 | +21% |
+| `events` | 0.974 | 1.045 | +7% |
 
 Object mode (the default) gains the most because the old per-row `{...spread}`
-was replaced by a compiled, shaped row builder. The win is largest where that
-overhead dominated: wide rows and null-heavy rows.
+was replaced by a compiled, shaped row builder — biggest where that overhead
+dominated (wide and null-heavy rows).
 
-## GC pressure — object mode, 3M rows (base → optimized)
+## GC pressure — object mode, 3M rows ↓
 
-| fixture | GC collections | total pause |
-| --- | --- | --- |
-| `seq` | 36 → **5** | 5.3 → 3.0 ms |
-| `users` | 424 → 371 | 34.8 → 32.9 ms |
-| `mixed` | 156 → 124 | 14.7 → 12.4 ms |
+| fixture | metric | base | optimized | Δ |
+| --- | --- | ---: | ---: | ---: |
+| `seq` | collections | 36 | 5 | **−86%** |
+| `seq` | pause | 5.6 ms | 2.9 ms | **−48%** |
+| `users` | collections | 424 | 371 | −12% |
+| `users` | pause | 40.5 ms | 31.7 ms | −22% |
+| `mixed` | collections | 156 | 124 | −21% |
+| `mixed` | pause | 14.0 ms | 13.0 ms | −7% |
 
 Recycling the parser's per-row throwaways (the `fields` array + `DataRowMessage`)
 cuts young-gen collections sharply where row parsing is the main allocator
-(`seq`: 36 → 5). On jsonb-heavy rows (`users`) most garbage is the parsed JSON
-objects from `pg-types`, so the relative win is smaller.
+(`seq`). On jsonb-heavy rows most garbage is the parsed JSON objects from
+`pg-types`, so the relative win is smaller.
+
+## Event-loop responsiveness — max lag on a 1M-row result via `client.query` ↓
+
+| metric | base | optimized | Δ |
+| --- | ---: | ---: | ---: |
+| max event-loop lag | 21.2 ms | 5.2 ms | **−75%** |
+
+A large result arrives as a burst of socket reads; the base parser processed the
+whole burst synchronously and stalled the loop. The faster parser plus
+cooperative yielding (pause/resume after a byte budget, default 512 KB, tunable
+via `new Pool({ maxResultChunkBytes })`) keep the loop responsive. The awaited
+result is identical — only the delivery is spread across a few more ticks.
 
 ## Real-world Pool — `pool.query()`, ~100-row list query, 10 conns / 40 concurrent
 
-| metric | base → optimized |
-| --- | --- |
-| throughput | 5,901 → **6,555 qps** (+11%) |
-| CPU per 1k queries | 161.5 → **144.9 ms** (−10%) |
-| avg latency | 6.77 → 6.10 ms (−10%) |
-| **p99 latency** | 8.57 → **7.81 ms** (−9%) |
-| max event-loop lag | 2.5 → **1.4 ms** (−44%) |
+| metric | base | optimized | Δ |
+| --- | ---: | ---: | ---: |
+| throughput ↑ | 5,918 qps | 6,581 qps | **+11%** |
+| CPU per 1k queries ↓ | 160.9 ms | 143.8 ms | −11% |
+| avg latency ↓ | 6.75 ms | 6.07 ms | −10% |
+| p99 latency ↓ | 8.65 ms | 7.76 ms | **−10%** |
 
-This is what an app actually sees. The benefit **scales with rows-per-query**:
-a few-row lookup is ~unchanged (the network round-trip dominates), a list/report
-endpoint gets ~+11% throughput and ~−9% p99 latency for free, and large
-exports get the most.
+What an app actually sees. The benefit **scales with rows-per-query**: a few-row
+lookup is ~unchanged (the network round-trip dominates), a list/report endpoint
+gets ~+11% throughput and ~−10% p99 latency for free, and large exports get the
+most.
 
-## Write path — `bind` (base → optimized)
+## Write path — `bind`, Mops/s ↑
 
-| case | base → optimized |
-| --- | --- |
-| `bind(2 small)` | 2.37 → 2.69 Mops/s (+14%) |
-| `bind(10 mixed)` | 0.91 → 1.12 Mops/s (**+23%**) |
-| `bind(unicode)` | 1.99 → 2.27 Mops/s (+14%) |
-| `full insert seq` | 1.52 → 1.65 Mops/s (+9%) |
+| case | base | optimized | Δ |
+| --- | ---: | ---: | ---: |
+| `bind(2 small)` | 2.36 | 2.72 | +15% |
+| `bind(10 mixed)` | 0.90 | 1.12 | **+24%** |
+| `bind(unicode)` | 1.97 | 2.33 | +18% |
+| `full insert seq` | 1.51 | 1.66 | +10% |
 
 String parameters are now encoded in a single pass (one `Buffer.byteLength`
 instead of three string scans); the gain grows with parameter size.
 
-## Binary protocol mode (opt-in, `{ binary: true }`)
+## Large data — the big-boy results (`npm run bench:big`)
 
-Binary is a **targeted** win, not a blanket one (full detail in
-[`BINARY.md`](packages/pg-protocol/bench/BINARY.md)):
+These compare **strategies** for one huge result. The Δ column is the peak-memory
+reduction versus the default `accumulate` path. Per-strategy peak RSS is measured
+in a fresh process (RSS never shrinks within one).
 
-| type | binary vs text CPU (e2e) | wire size |
-| --- | --- | --- |
-| **bytea** | **2.6× less** | 53% |
-| timestamp / date | 1.3× more | **41%** |
-| int / numeric | 1.6× more | ~92% |
-| float | 3.6× more | ~93% |
+**500k-row result (~6 columns):**
 
-Use binary for bytea-heavy (CPU + bandwidth) and wide-timestamp (bandwidth)
-result sets; the optimized **text** path stays fastest for numeric-heavy rows.
+| strategy | rows/s | max lag | peak RSS | Δ RSS vs accumulate |
+| --- | ---: | ---: | ---: | ---: |
+| `client.query` accumulate (object) | 1.48 M | 7.2 ms | 70 MB | — |
+| `.on('row')` stream (no accumulate) | 1.47 M | 4.8 ms | 12 MB | **−83%** |
+| `pg-cursor` batched | 1.09 M | 0.6 ms | 2 MB | **−97%** |
+
+**~400MB result (100k rows × 4KB):**
+
+| strategy | MB/s | max lag | peak RSS | Δ RSS vs accumulate |
+| --- | ---: | ---: | ---: | ---: |
+| `client.query` accumulate | ~1000 | ~8–12 ms | 582 MB | — |
+| `.on('row')` stream | 1736 | 0.6 ms | 23 MB | **−96%** |
+| `pg-cursor` batched | 814 | 2.1 ms | 177 MB | −70% |
+
+**Rows with multi-MB text + jsonb fields (40 rows, ~5MB each):** the wire parser
+handles multi-MB fields at ~10 GB/s — the cost is `JSON.parse` of the jsonb and
+holding the parsed objects. Accumulate holds ~289 MB; `.on('row')` stream holds
+~20 MB (**−93%**) at the same throughput.
+
+**Guidance:** for results that fit comfortably in RAM, the default `query` is now
+fast *and* responsive. For hundreds of MB to GB, use `.on('row')` streaming (flat
+memory, simple API) or `pg-cursor` (flat memory + lowest lag). The per-row
+parsing/GC wins above apply to every strategy.
 
 ---
 
-## What changed (all drop-in unless noted)
+## What changed (all drop-in)
 
 - `pg-protocol`: `utf8Slice` field decode, a DataRow fast-path that bypasses the
-  `BufferReader`, recycled DataRow message/fields (lower GC), single-pass string
-  parameter encoding, and binary-format DataRow parsing.
-- `pg`: compiled per-shape row builders (object + array, cached), cooperative
-  event-loop yielding for very large results (`new Pool({ maxResultChunkBytes })`,
-  default 512 KB), and binary type parsers for bytea/uuid/json/jsonb.
+  `BufferReader`, recycled DataRow message/fields (lower GC), and single-pass
+  string-parameter encoding.
+- `pg`: compiled per-shape row builders (object + array, cached) and cooperative
+  event-loop yielding for very large results
+  (`new Pool({ maxResultChunkBytes })`, default 512 KB).
 
 ## Reproducing individual suites
 
 ```sh
 npm run bench:read     # parse throughput + GC
+npm run bench:gc       # GC pressure only (array + object)
+npm run bench:loop     # event-loop lag (large result + per-strategy)
 npm run bench:write    # write path
-npm run bench:binary   # binary vs text
 npm run bench:pool     # real-world Pool
+npm run bench:big      # 500k rows, ~400MB result, multi-MB fields
 npm run bench:ab       # this whole base-vs-optimized comparison
 ```

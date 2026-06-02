@@ -95,6 +95,16 @@ const commands = {
     console.log('\n=== baseline (master) vs optimized A/B ===')
     run('zsh', [b('full-ab.sh')], { cwd: ROOT })
   },
+  big() {
+    // the "big boy" large-data scenarios: hundreds of thousands of rows, a
+    // ~400MB result, and rows with multi-MB text/jsonb fields.
+    console.log('\n=== 500k-row result: accumulate vs stream vs cursor ===')
+    node(['--expose-gc', pg('bench-large-result.js'), '500000', '1000'], PG)
+    console.log('\n=== ~400MB result: throughput, peak memory, event-loop lag ===')
+    node(['--expose-gc', '--max-old-space-size=4096', pg('bench-400mb.js'), '100000', '4000'], PG)
+    console.log('\n=== rows with multi-MB text + jsonb fields ===')
+    node(['--expose-gc', '--max-old-space-size=4096', pg('bench-big-fields.js'), '40'], PG)
+  },
   guard(args) {
     ensureFixtures('fixtures.json', 'capture-fixtures.js')
     node([b('regression-guard.js'), ...args], PROTO)
@@ -119,6 +129,7 @@ const help = `node bench/run.js <command> [args]   (or: npm run bench:<command>)
   loop      event-loop lag — large result + per-strategy (accumulate/stream/cursor)
   pool      real-world Pool + pool.query()   [rows conc poolMax secs]
   e2e       large-result strategies: accumulate vs stream vs cursor   [rows batch]
+  big       big-data scenarios: 500k rows, ~400MB result, multi-MB text/jsonb fields
   ab        baseline (master) vs optimized A/B  (throughput, GC, lag, pool, write)
   guard     regression guard   (--update to (re)snapshot the baseline)
   capture   (re)capture all fixtures
