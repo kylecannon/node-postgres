@@ -37,6 +37,7 @@ suite() {  # $1 = label
     BENCH_TARGET_ROWS=3000000 node --expose-gc bench/gc-bench.js users object
     BENCH_TARGET_ROWS=3000000 node --expose-gc bench/gc-bench.js mixed object ) >/tmp/ab_${t}_gc.txt 2>&1
   (cd $PG && node bench-pool.js 100 40 10 5) >/tmp/ab_${t}_pool.txt 2>&1
+  (cd $PG && node bench-loop-lag.js 1000000) >/tmp/ab_${t}_loop.txt 2>&1
   (cd $PROTO && node bench/write-bench.js) >/tmp/ab_${t}_write.txt 2>&1
 }
 
@@ -69,6 +70,10 @@ echo ""
 echo "================ REAL-WORLD POOL (100-row list query) ================"
 echo "BASELINE : $(cat /tmp/ab_base_pool.txt)"
 echo "OPTIMIZED: $(cat /tmp/ab_opt_pool.txt)"
+echo ""
+echo "================ EVENT-LOOP LAG (1M-row result, lower = better) ================"
+echo "BASELINE : $(cat /tmp/ab_base_loop.txt)"
+echo "OPTIMIZED: $(cat /tmp/ab_opt_loop.txt)"
 echo ""
 echo "================ WRITE PATH (bind) ================"
 echo "-- BASELINE --";  grep -E "bind|full" /tmp/ab_base_write.txt

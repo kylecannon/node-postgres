@@ -21,6 +21,8 @@
     "bench": "node packages/pg-protocol/bench/run.js",
     "bench:read": "node packages/pg-protocol/bench/run.js read",
     "bench:write": "node packages/pg-protocol/bench/run.js write",
+    "bench:gc": "node packages/pg-protocol/bench/run.js gc",
+    "bench:loop": "node packages/pg-protocol/bench/run.js loop",
     "bench:binary": "node packages/pg-protocol/bench/run.js binary",
     "bench:pool": "node packages/pg-protocol/bench/run.js pool",
     "bench:e2e": "node packages/pg-protocol/bench/run.js e2e",

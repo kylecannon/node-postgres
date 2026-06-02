@@ -70,6 +70,19 @@ const commands = {
     console.log('\n=== serializer / write-path ===')
     node(['--expose-gc', b('write-bench.js')], PROTO)
   },
+  gc() {
+    ensureFixtures('fixtures.json', 'capture-fixtures.js')
+    console.log('\n=== GC pressure: array mode (collections, pause, ns-GC/row) ===')
+    node(['--expose-gc', b('gc-bench.js'), 'all', 'array'], PROTO)
+    console.log('\n=== GC pressure: object mode ===')
+    node(['--expose-gc', b('gc-bench.js'), 'all', 'object'], PROTO)
+  },
+  loop() {
+    console.log('\n=== event-loop lag: 1M-row result via plain client.query (lower = better) ===')
+    node([pg('bench-loop-lag.js'), '1000000'], PG)
+    console.log('\n=== event-loop lag by strategy: accumulate vs stream vs cursor ===')
+    node(['--expose-gc', pg('bench-large-result.js'), '500000', '1000'], PG)
+  },
   binary() {
     ensureFixtures('binary-fixtures.json', 'capture-binary-fixtures.js')
     console.log('\n=== binary vs text: throughput ===')
@@ -111,10 +124,12 @@ const help = `node bench/run.js <command> [args]   (or: npm run bench:<command>)
 
   read      parse throughput + GC (deterministic microbench)
   write     serializer / write-path throughput + GC
+  gc        GC pressure only — array + object, all fixtures
+  loop      event-loop lag — large result + per-strategy (accumulate/stream/cursor)
   binary    binary vs text — throughput, GC, end-to-end
   pool      real-world Pool + pool.query()   [rows conc poolMax secs]
   e2e       large-result strategies: accumulate vs stream vs cursor   [rows batch]
-  ab        baseline (master) vs optimized A/B
+  ab        baseline (master) vs optimized A/B  (throughput, GC, lag, pool, write)
   guard     regression guard   (--update to (re)snapshot the baseline)
   capture   (re)capture all fixtures
   all       read + write + binary + pool
