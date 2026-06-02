@@ -13,3 +13,4 @@ manually-test-on-heroku.js
 tsconfig.tsbuildinfo
 *.tsbuildinfo
 packages/pg-protocol/bench/fixtures.json
+packages/pg-protocol/bench/binary-fixtures.json
