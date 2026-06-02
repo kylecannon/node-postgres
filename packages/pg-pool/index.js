@@ -3,6 +3,12 @@ const EventEmitter = require('events').EventEmitter
 
 const NOOP = function () {}
 
+// When the dead prefix of the pending queue (already-dequeued head slots) grows
+// past this many entries AND past half the array, compact it with a single
+// slice. Small enough to bound wasted memory, large enough to keep compaction
+// rare under normal churn.
+const PENDING_COMPACT_THRESHOLD = 64
+
 const removeWhere = (list, predicate) => {
   const i = list.findIndex(predicate)
 
@@ -167,7 +173,7 @@ class Pool extends EventEmitter {
     if (this._pendingHead === this._pendingQueue.length) {
       this._pendingQueue.length = 0
       this._pendingHead = 0
-    } else if (this._pendingHead > 64 && this._pendingHead * 2 > this._pendingQueue.length) {
+    } else if (this._pendingHead > PENDING_COMPACT_THRESHOLD && this._pendingHead * 2 > this._pendingQueue.length) {
       this._pendingQueue = this._pendingQueue.slice(this._pendingHead)
       this._pendingHead = 0
     }

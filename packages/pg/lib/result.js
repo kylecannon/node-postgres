@@ -195,16 +195,14 @@ class Result {
     // of rowDescriptions...eg: 'select NOW(); select 1::int;'
     // you need to reset the fields
     this.fields = fieldDescriptions
-    if (this.fields.length) {
-      this._parsers = new Array(fieldDescriptions.length)
+    const fieldCount = fieldDescriptions.length
+    if (fieldCount) {
+      this._parsers = new Array(fieldCount)
     }
 
-    const row = Object.create(null)
-
     let hasProtoField = false
-    for (let i = 0; i < fieldDescriptions.length; i++) {
+    for (let i = 0; i < fieldCount; i++) {
       const desc = fieldDescriptions[i]
-      row[desc.name] = null
       // a "__proto__" column cannot be expressed as an object literal key
       // without mutating the prototype, so such shapes use the interpreted path
       if (desc.name === '__proto__') {
@@ -218,22 +216,39 @@ class Result {
       }
     }
 
-    this._prebuiltEmptyResultObject = { ...row }
-
     // Compile a per-shape row builder. Falls back to the interpreted path (left
     // as null) when code generation is forbidden (sandbox), the shape can't be
     // compiled (a "__proto__" column), or there are no fields.
     this._rowBuilder = null
-    if (canCompile && fieldDescriptions.length) {
+    if (canCompile && fieldCount) {
       try {
         if (this.rowAsArray) {
-          this._rowBuilder = getArrayRowBuilder(fieldDescriptions.length)
+          this._rowBuilder = getArrayRowBuilder(fieldCount)
         } else if (!hasProtoField) {
           this._rowBuilder = getObjectRowBuilder(fieldDescriptions)
         }
       } catch (e) {
         this._rowBuilder = null
       }
+    }
+
+    // The prebuilt empty-row template is read ONLY by the interpreted object
+    // fallback in parseRow, so only build it when that path will run (object mode
+    // with no compiled builder). Array mode and the compiled path never read it,
+    // so building it there is wasted per-query work.
+    if (this._rowBuilder === null && !this.rowAsArray) {
+      // Build the template on a null-proto object (safe for arbitrary column
+      // names) then spread into a plain object: the Object.prototype shape makes
+      // parseRow's per-row `{ ...template }` spread fast. The spread is NOT
+      // redundant — assigning the null-proto object directly makes per-row
+      // spreading several times slower.
+      const row = Object.create(null)
+      for (let i = 0; i < fieldCount; i++) {
+        row[fieldDescriptions[i].name] = null
+      }
+      this._prebuiltEmptyResultObject = { ...row }
+    } else {
+      this._prebuiltEmptyResultObject = null
     }
   }
 }

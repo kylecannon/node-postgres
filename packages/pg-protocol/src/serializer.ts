@@ -48,7 +48,7 @@ const password = (password: string): Buffer => {
 
 const sendSASLInitialResponseMessage = function (mechanism: string, initialResponse: string): Buffer {
   // 0x70 = 'p'
-  writer.addCString(mechanism).addInt32(Buffer.byteLength(initialResponse)).addString(initialResponse)
+  writer.addCString(mechanism).addInt32PrefixedString(initialResponse)
 
   return writer.flush(code.startup)
 }

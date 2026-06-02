@@ -31,7 +31,16 @@ function extract(buf) {
 function buildResult(rowMode, fieldDescs, interpreted) {
   const r = new Result(rowMode, null)
   r.addFields(fieldDescs)
-  if (interpreted) r._rowBuilder = null // simulate no-codegen / fallback path
+  if (interpreted) {
+    // Simulate the real no-codegen / fallback path (Workers, __proto__ column).
+    // addFields skips the empty-row template when it compiled a builder, so to
+    // match what the genuine interpreted path sees we rebuild that template here
+    // exactly as addFields would when no builder exists.
+    r._rowBuilder = null
+    const template = Object.create(null)
+    for (const f of fieldDescs) template[f.name] = null
+    r._prebuiltEmptyResultObject = { ...template }
+  }
   return r
 }
 
@@ -61,7 +70,9 @@ async function main() {
     for (const t of bench.tasks) {
       const rps = t.result.hz * rows.length
       console.log(
-        `${t.name.padEnd(26)} ${(rps / 1e6).toFixed(3)} Mrows/s  ${(1e9 / rps).toFixed(1)} ns/row  ±${t.result.rme.toFixed(2)}%`
+        `${t.name.padEnd(26)} ${(rps / 1e6).toFixed(3)} Mrows/s  ${(1e9 / rps).toFixed(
+          1
+        )} ns/row  ±${t.result.rme.toFixed(2)}%`
       )
     }
     console.log('')
@@ -75,7 +86,11 @@ async function main() {
   })
   await ab.run()
   for (const t of ab.tasks) {
-    console.log(`${t.name.padEnd(34)} ${(t.result.hz / 1e3).toFixed(1)}k ops/s  ${(t.result.mean * 1e3).toFixed(2)} us/op  ±${t.result.rme.toFixed(2)}%`)
+    console.log(
+      `${t.name.padEnd(34)} ${(t.result.hz / 1e3).toFixed(1)}k ops/s  ${(t.result.mean * 1e3).toFixed(
+        2
+      )} us/op  ±${t.result.rme.toFixed(2)}%`
+    )
   }
 }
 
