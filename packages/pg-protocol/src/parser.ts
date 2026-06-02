@@ -96,6 +96,14 @@ export class Parser {
   private reusableDataRowMessage = new DataRowMessage(LATEINIT_LENGTH, emptyArray)
   private reusableFields: any[] | null = null
 
+  // Per-column result formats captured from the most recent RowDescription
+  // (a RowDescription always precedes its DataRows on the wire). 0 = text,
+  // 1 = binary. `rowAllText` is a fast boolean so the overwhelmingly common
+  // all-text case keeps the committed DataRow fast path branch-light: when it
+  // is true, parseDataRowMessage never consults `rowFormats` at all.
+  private rowFormats: Int8Array | null = null
+  private rowAllText = true
+
   constructor(opts?: StreamOptions) {
     if (opts?.mode === 'binary') {
       throw new Error('Binary mode not supported yet')
@@ -197,6 +205,9 @@ export class Parser {
         break
       case MessageCodes.NoData:
         message = noData
+        // No DataRows follow NoData; clear any stale formats so a subsequent
+        // text-mode statement isn't accidentally treated as binary.
+        this.rowAllText = true
         break
       case MessageCodes.PortalSuspended:
         message = portalSuspended
@@ -236,6 +247,7 @@ export class Parser {
         break
       case MessageCodes.RowDescriptionMessage:
         message = parseRowDescriptionMessage(reader)
+        this.setRowFormats(message as RowDescriptionMessage)
         break
       case MessageCodes.ParameterDescriptionMessage:
         message = parseParameterDescriptionMessage(reader)
@@ -259,6 +271,35 @@ export class Parser {
     return message
   }
 
+  // Capture the per-column result formats from the latest RowDescription so the
+  // following DataRows know which columns arrive as binary bytes. Reuses the
+  // backing Int8Array when the field count matches to avoid a per-query alloc
+  // (same pattern as `reusableFields`).
+  private setRowFormats(message: RowDescriptionMessage): void {
+    const fields = message.fields
+    const fieldCount = message.fieldCount
+    let allText = true
+    for (let i = 0; i < fieldCount; i++) {
+      if (fields[i].format !== 'text') {
+        allText = false
+        break
+      }
+    }
+    this.rowAllText = allText
+    if (allText) {
+      // Common case: nothing to consult in the hot path. Leave rowFormats as-is;
+      // it is never read while rowAllText is true.
+      return
+    }
+    let formats = this.rowFormats
+    if (formats === null || formats.length !== fieldCount) {
+      formats = this.rowFormats = new Int8Array(fieldCount)
+    }
+    for (let i = 0; i < fieldCount; i++) {
+      formats[i] = fields[i].format === 'binary' ? 1 : 0
+    }
+  }
+
   // DataRow is the hottest message in any result set, so it's parsed directly
   // from the buffer with local offset arithmetic (no BufferReader round-trips)
   // and, when `reuseObjects` is set, into a recycled message + fields array.
@@ -278,6 +319,11 @@ export class Parser {
       fields = new Array(fieldCount)
     }
 
+    // Hoisted so the all-text hot path (every existing text-mode result set)
+    // does a single boolean read and then runs the exact committed inner loop.
+    const allText = this.rowAllText
+    const formats = this.rowFormats
+
     for (let i = 0; i < fieldCount; i++) {
       const len = buffer.readInt32BE(offset)
       offset += 4
@@ -285,7 +331,19 @@ export class Parser {
       if (len === -1) {
         fields[i] = null
       } else {
-        fields[i] = decodeUtf8(buffer, offset, offset + len)
+        if (allText || formats === null || formats[i] === 0) {
+          // text column: keep the utf8 fast path
+          fields[i] = decodeUtf8(buffer, offset, offset + len)
+        } else {
+          // binary column: hand out a COPY of the field bytes. The parser's
+          // `buffer` is transient (reused across parse() calls and reallocated
+          // by mergeBuffer), so a view/.subarray would alias memory that gets
+          // overwritten by the next socket read. allocUnsafe is safe because we
+          // immediately fill all `len` bytes via copy.
+          const b = Buffer.allocUnsafe(len)
+          buffer.copy(b, 0, offset, offset + len)
+          fields[i] = b
+        }
         offset += len
       }
     }

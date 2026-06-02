@@ -80,7 +80,9 @@ const buffers = {
       if (col == null) {
         buf.addInt32(-1)
       } else {
-        const strBuf = Buffer.from(col, 'utf8')
+        // Buffers are emitted verbatim (used to simulate binary-format columns);
+        // everything else is utf8-encoded as a text-format column.
+        const strBuf = Buffer.isBuffer(col) ? col : Buffer.from(col, 'utf8')
         buf.addInt32(strBuf.length)
         buf.add(strBuf)
       }
@@ -120,6 +122,10 @@ const buffers = {
 
   emptyQuery: function () {
     return new BufferList().join(true, 'I')
+  },
+
+  noData: function () {
+    return new BufferList().join(true, 'n')
   },
 
   portalSuspended: function () {
