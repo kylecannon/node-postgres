@@ -31,7 +31,7 @@ const OPT = '/tmp/pgbench-opt'
 const BASE = '/tmp/pgbench-base'
 
 const ROUNDS = parseInt(process.argv[2] || '4', 10)
-const SUITE = process.argv.find((a) => /^(replay|write|pool|all)$/.test(a)) || 'all'
+const SUITE = process.argv.find((a) => /^(replay|write|pool|gc|loop|all)$/.test(a)) || 'all'
 const GUARD = process.argv.includes('--guard')
 
 const env = { ...process.env }
@@ -83,23 +83,46 @@ const benches = {
     const x = out.match(/qps (\d+)/)
     return x ? { 'pool:qps@100rows': parseInt(x[1], 10) } : {}
   },
+  // lower-is-better families (gc:, lag:)
+  gc: () => {
+    const out =
+      spawnSync(process.execPath, ['--expose-gc', path.join(BENCH, 'gc-bench.js'), 'all', 'object'], {
+        cwd: PROTO,
+        env: { ...env, BENCH_TARGET_ROWS: '2000000' },
+        encoding: 'utf8',
+      }).stdout || ''
+    const m = {}
+    for (const l of out.split('\n')) {
+      const x = l.match(/^(\S+):.*?([\d.]+) ns GC\/row/)
+      if (x) m['gc:' + x[1]] = parseFloat(x[2])
+    }
+    return m
+  },
+  loop: () => {
+    const out = node([path.join(PG, 'bench-loop-lag.js'), '1000000'], PG)
+    const x = out.match(/maxLagMs ([\d.]+)/)
+    return x ? { 'lag:1M-row maxLag(ms)': parseFloat(x[1]) } : {}
+  },
 }
-const suites = SUITE === 'all' ? ['replay', 'write', 'pool'] : [SUITE]
+const suites = SUITE === 'all' ? ['replay', 'write', 'pool', 'gc', 'loop'] : [SUITE]
 
 const median = (a) => {
   const s = a.slice().sort((x, y) => x - y)
   const m = s.length >> 1
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2
 }
-// higher-is-better for all current metrics
-function verdict(optVals, baseVals) {
+// gc:/lag: metrics are lower-is-better; everything else higher-is-better
+const lowerIsBetter = (key) => key.startsWith('gc:') || key.startsWith('lag:')
+function verdict(key, optVals, baseVals) {
   const deltas = optVals.map((o, i) => (o - baseVals[i]) / baseVals[i])
   const med = median(deltas)
   const allSameSign = deltas.every((d) => d > 0) || deltas.every((d) => d < 0)
   const spread = Math.max(...deltas) - Math.min(...deltas)
   // reliable: every round agrees in direction and the delta clears the spread
   const reliable = allSameSign && Math.abs(med) > spread
-  const label = !reliable ? 'INCONCLUSIVE' : med >= 0 ? 'reliable ↑' : 'REGRESSION ↓'
+  const improved = lowerIsBetter(key) ? med < 0 : med > 0
+  const arrow = lowerIsBetter(key) ? '↓' : '↑'
+  const label = !reliable ? 'INCONCLUSIVE' : improved ? `reliable ${arrow}` : 'REGRESSION'
   return { med, spread, reliable, label }
 }
 
@@ -160,7 +183,7 @@ async function main() {
     '\nmetric'.padEnd(26) + 'base'.padStart(10) + 'opt'.padStart(10) + 'Δ median'.padStart(11) + '  confidence'
   )
   for (const k of keys) {
-    const v = verdict(optRuns[k], baseRuns[k])
+    const v = verdict(k, optRuns[k], baseRuns[k])
     if (v.label.startsWith('REGRESSION')) regressions++
     const b = median(baseRuns[k])
     const o = median(optRuns[k])

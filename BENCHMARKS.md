@@ -5,11 +5,14 @@ with `master`) vs the optimized `HEAD`, on one machine.
 
 > **Measurement note (important):** a laptop's thermal drift (±several %) is
 > large enough to distort a phase-separated A/B (run all-optimized, then
-> all-base) — early numbers measured that way came out a few points high. The
-> deltas below are the **median of alternating samples** (optimized, base,
-> optimized, base, … swapping prebuilt artifacts each round), which cancels the
-> drift. `npm run bench:ab` is the quick (phase-separated) view; trust it for
-> direction and big effects, not the last few points of a small one.
+> all-base) — early numbers measured that way came out a few points high. Every
+> number below is the **median of 5 alternating rounds** from `npm run
+> bench:verify` (optimized, base, optimized, base, … swapping prebuilt artifacts
+> each round, which cancels the drift) and was **`reliable ↑`/`↓`** there —
+> i.e. every round agreed in direction and the delta cleared the round-to-round
+> spread. Anything `bench:verify` flagged `INCONCLUSIVE` is marked as such, not
+> quoted as a win. `npm run bench:ab` is the quick (phase-separated) view; trust
+> it for direction, not the last few points.
 
 Throughput uses [tinybench](https://github.com/tinylibs/tinybench) (thousands of
 samples). Raw figures are machine-specific; the **Δ** column is the improvement
@@ -25,53 +28,56 @@ samples). Raw figures are machine-specific; the **Δ** column is the improvement
 
 | fixture | base | optimized | Δ |
 | --- | ---: | ---: | ---: |
-| `pg_type` (12 cols) | 1.001 | 1.308 | **+31%** |
-| `seq` (1 int col) | 7.526 | 8.601 | +14% |
-| `mixed` (5 cols) | 1.243 | 1.438 | +16% |
-| `users` (uuid/jsonb/ts/numeric) | 0.505 | 0.601 | +19% |
-| `orders` (numerics/enum/jsonb) | 0.672 | 0.874 | **+30%** |
-| `wide` (60 cols) | 0.155 | 0.268 | **+73%** |
-| `null_heavy` (16 cols, ~85% null) | 1.662 | 4.362 | **+162%** |
-| `events` (50k rows, jsonb) | 0.879 | 1.036 | +18% |
+| `pg_type` (12 cols) | 1.012 | 1.322 | **+31%** |
+| `seq` (1 int col) | 7.636 | 8.613 | +13% |
+| `mixed` (5 cols) | 1.275 | 1.445 | +13% |
+| `users` (uuid/jsonb/ts/numeric) | 0.515 | 0.604 | +18% |
+| `orders` (numerics/enum/jsonb) | 0.680 | 0.888 | **+32%** |
+| `wide` (60 cols) | 0.157 | 0.274 | **+74%** |
+| `null_heavy` (16 cols, ~85% null) | 1.680 | 4.415 | **+162%** |
+| `events` (50k rows, jsonb) | 0.895 | 1.049 | +18% |
 
 ## Parse throughput — array mode, Mrows/s ↑
 
 | fixture | base | optimized | Δ |
 | --- | ---: | ---: | ---: |
-| `pg_type` | 1.117 | 1.343 | +20% |
-| `seq` | 8.317 | 9.349 | +12% |
-| `mixed` | 1.331 | 1.465 | +10% |
-| `users` | 0.540 | 0.589 | +9% |
-| `orders` | 0.791 | 0.885 | +12% |
-| `wide` | 0.225 | 0.266 | +19% |
-| `null_heavy` | 3.729 | 4.397 | +18% |
-| `events` | 0.982 | 1.030 | +5% |
+| `pg_type` | 1.128 | 1.351 | +20% |
+| `seq` | 8.403 | 9.442 | +11% |
+| `mixed` | 1.361 | 1.472 | +8% |
+| `users` | 0.547 | 0.591 | +8% |
+| `orders` | 0.791 | 0.897 | +12% |
+| `wide` | 0.229 | 0.273 | +20% |
+| `null_heavy` | 3.764 | 4.457 | +18% |
+| `events` | 0.995 | 1.045 | +6% |
 
 Object mode (the default) gains the most because the old per-row `{...spread}`
 was replaced by a compiled, shaped row builder — biggest where that overhead
 dominated (wide and null-heavy rows).
 
-## GC pressure — object mode, 3M rows ↓
+## GC pressure — object mode, ns of GC pause per row ↓
 
-| fixture | metric | base | optimized | Δ |
-| --- | --- | ---: | ---: | ---: |
-| `seq` | collections | 36 | 5 | **−86%** |
-| `seq` | pause | 5.6 ms | 2.9 ms | **−48%** |
-| `users` | collections | 424 | 371 | −12% |
-| `users` | pause | 40.5 ms | 31.7 ms | −22% |
-| `mixed` | collections | 156 | 124 | −21% |
-| `mixed` | pause | 14.0 ms | 13.0 ms | −7% |
+| fixture | base | optimized | Δ |
+| --- | ---: | ---: | ---: |
+| `seq` | 1.7 | 1.1 | **−38%** |
+| `null_heavy` | 3.6 | 2.2 | **−39%** |
+| `pg_type` | 3.9 | 2.9 | **−28%** |
+| `mixed` | 5.2 | 4.1 | −22% |
+| `wide` | 14.2 | 12.2 | −17% |
+| `events` | 17.8 | 15.2 | −13% |
+| `orders` | 11.7 | 10.1 | (−19%, within noise) |
+| `users` | 13.9 | 12.1 | (−12%, within noise) |
 
 Recycling the parser's per-row throwaways (the `fields` array + `DataRowMessage`)
-cuts young-gen collections sharply where row parsing is the main allocator
-(`seq`). On jsonb-heavy rows most garbage is the parsed JSON objects from
-`pg-types`, so the relative win is smaller.
+cuts young-gen GC sharply where row parsing is the main allocator — `seq` drops
+from ~36 to ~5 collections per 3M rows. On jsonb/numeric-heavy rows the parsed
+objects from `pg-types` dominate the garbage, so the win is smaller and noisier
+(`orders`/`users` don't clear the noise floor even at 5 rounds).
 
 ## Event-loop responsiveness — max lag on a 1M-row result via `client.query` ↓
 
 | metric | base | optimized | Δ |
 | --- | ---: | ---: | ---: |
-| max event-loop lag | 21.2 ms | 5.2 ms | **−75%** |
+| max event-loop lag | 21.8 ms | 5.1 ms | **−76%** |
 
 A large result arrives as a burst of socket reads; the base parser processed the
 whole burst synchronously and stalled the loop. The faster parser plus
@@ -83,24 +89,25 @@ result is identical — only the delivery is spread across a few more ticks.
 
 | metric | base | optimized | Δ |
 | --- | ---: | ---: | ---: |
-| throughput ↑ | 5,918 qps | 6,581 qps | **+11%** |
+| throughput ↑ (verified) | 5,839 qps | 6,351 qps | **+9%** |
 | CPU per 1k queries ↓ | 160.9 ms | 143.8 ms | −11% |
 | avg latency ↓ | 6.75 ms | 6.07 ms | −10% |
 | p99 latency ↓ | 8.65 ms | 7.76 ms | **−10%** |
 
-What an app actually sees. The benefit **scales with rows-per-query**: a few-row
-lookup is ~unchanged (the network round-trip dominates), a list/report endpoint
-gets ~+11% throughput and ~−10% p99 latency for free, and large exports get the
-most.
+Throughput is the alternating-verified figure; CPU/latency are from the same
+`bench-pool` run (they track throughput). What an app actually sees — the benefit
+**scales with rows-per-query**: a few-row lookup is ~unchanged (the network
+round-trip dominates), a list/report endpoint gets ~+9% throughput and ~−10% p99
+latency for free, and large exports get the most.
 
 ## Write path — `bind`, Mops/s ↑
 
 | case | base | optimized | Δ |
 | --- | ---: | ---: | ---: |
-| `bind(2 small)` | 2.35 | 2.66 | +13% |
-| `bind(10 mixed)` | 0.90 | 1.09 | **+22%** |
-| `bind(unicode)` | 1.98 | 2.26 | +14% |
-| `full insert seq` | 1.50 | 1.62 | +8% |
+| `bind(2 small)` | 2.37 | 2.68 | +16% |
+| `bind(10 mixed)` | 0.91 | 1.12 | **+23%** |
+| `bind(unicode)` | 2.03 | 2.31 | +14% |
+| `full insert seq` | 1.53 | 1.67 | +9% |
 
 String parameters are now encoded in a single pass (one `Buffer.byteLength`
 instead of three string scans); the gain grows with parameter size.
