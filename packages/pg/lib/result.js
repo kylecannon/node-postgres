@@ -18,12 +18,15 @@ try {
 // allocating an empty object/array and filling it field-by-field in a loop.
 // V8 compiles the generated literal into a single shaped allocation with the
 // per-field stores inlined, which is several times faster than the interpreted
-// path. The builder is a pure function of (rowData `d`, parsers `p`, Buffer `B`)
+// path. The builder is a pure function of (rowData `d`, parsers `p`)
 // so it captures nothing and can be garbage collected with the Result.
 //
-// `d[i]` is the raw field value (a string, or null for SQL NULL). Column names
-// only ever appear via JSON.stringify, so arbitrary DB-supplied names cannot
-// inject code.
+// `d[i]` is the raw field value: a string for text columns, a Buffer for binary
+// columns (the parser yields a copied Buffer for binary fields), or null for SQL
+// NULL. The per-column type parser `p[i]` (selected by format in addFields) is
+// applied verbatim, so binary columns get their Buffer passed straight to the
+// binary parser. Column names only ever appear via JSON.stringify, so arbitrary
+// DB-supplied names cannot inject code.
 function compileArrayRowBuilder(fieldCount) {
   let src = 'return ['
   for (let i = 0; i < fieldCount; i++) {
@@ -55,13 +58,15 @@ function compileObjectRowBuilder(fieldDescriptions) {
     if (i) src += ','
     const desc = fieldDescriptions[i]
     const key = JSON.stringify(desc.name)
-    const value =
-      desc.format === 'binary' ? `d[${i}]===null?null:p[${i}](B.from(d[${i}]))` : `d[${i}]===null?null:p[${i}](d[${i}])`
-    src += `${key}:${value}`
+    // The raw field value `d[i]` is already a Buffer for binary columns and a
+    // string for text columns, so it is passed straight to the per-column type
+    // parser `p[i]` regardless of format. (`p[i]` is the binary parser for
+    // binary columns and the text parser for text columns, chosen in addFields.)
+    src += `${key}:d[${i}]===null?null:p[${i}](d[${i}])`
   }
   src += '}'
 
-  return new Function('d', 'p', 'B', src)
+  return new Function('d', 'p', src)
 }
 
 // Object-mode builders depend on column names + formats (parsers are passed at
@@ -159,7 +164,7 @@ class Result {
   parseRow(rowData) {
     const builder = this._rowBuilder
     if (builder !== null) {
-      return builder(rowData, this._parsers, Buffer)
+      return builder(rowData, this._parsers)
     }
     // interpreted fallback (sandboxed runtimes, or shapes we won't compile such
     // as a "__proto__" column).
@@ -169,14 +174,10 @@ class Result {
     const len = rowData.length
     for (let i = 0; i < len; i++) {
       const rawValue = rowData[i]
-      // read the field descriptor once instead of twice (name + format)
-      const field = fields[i]
-      if (rawValue !== null) {
-        const v = field.format === 'binary' ? Buffer.from(rawValue) : rawValue
-        row[field.name] = parsers[i](v)
-      } else {
-        row[field.name] = null
-      }
+      // The raw value is already a Buffer for binary columns and a string for
+      // text columns (the parser does the format-specific decode), so it is
+      // applied directly to the per-column type parser `parsers[i]`.
+      row[fields[i].name] = rawValue === null ? null : parsers[i](rawValue)
     }
     return row
   }
