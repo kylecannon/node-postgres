@@ -26,7 +26,7 @@ import {
   AuthenticationMD5Password,
   NoticeMessage,
 } from './messages'
-import { BufferReader } from './buffer-reader'
+import { BufferReader, decodeUtf8 } from './buffer-reader'
 
 // every message is prefixed with a single bye
 const CODE_LENGTH = 1
@@ -45,6 +45,7 @@ export type Packet = {
 }
 
 const emptyBuffer = Buffer.allocUnsafe(0)
+const emptyArray: any[] = []
 
 type StreamOptions = TransformOptions & {
   mode: Mode
@@ -84,6 +85,17 @@ export class Parser {
   private reader = new BufferReader()
   private mode: Mode
 
+  // When `reuseObjects` is enabled the parser recycles a single DataRowMessage
+  // and its backing `fields` array across rows instead of allocating fresh ones,
+  // which dramatically lowers GC pressure on large result sets. This is ONLY
+  // safe when the consumer fully reads each message during the synchronous
+  // callback and never retains the message or its `fields` past that call.
+  // Defaults to off to preserve the safe contract for direct Parser users; pg
+  // enables it and disables it whenever a `message` listener could retain a row.
+  public reuseObjects = false
+  private reusableDataRowMessage = new DataRowMessage(LATEINIT_LENGTH, emptyArray)
+  private reusableFields: any[] | null = null
+
   constructor(opts?: StreamOptions) {
     if (opts?.mode === 'binary') {
       throw new Error('Binary mode not supported yet')
@@ -95,14 +107,17 @@ export class Parser {
     this.mergeBuffer(buffer)
     const bufferFullLength = this.bufferOffset + this.bufferLength
     let offset = this.bufferOffset
+    // Hoist the buffer into a local so the hot loop avoids reloading `this.buffer`
+    // (and re-checking its hidden class) on every message.
+    const buf = this.buffer
     while (offset + HEADER_LENGTH <= bufferFullLength) {
       // code is 1 byte long - it identifies the message type
-      const code = this.buffer[offset]
+      const code = buf[offset]
       // length is 1 Uint32BE - it is the length of the message EXCLUDING the code
-      const length = this.buffer.readUInt32BE(offset + CODE_LENGTH)
+      const length = buf.readUInt32BE(offset + CODE_LENGTH)
       const fullMessageLength = CODE_LENGTH + length
       if (fullMessageLength + offset <= bufferFullLength) {
-        const message = this.handlePacket(offset + HEADER_LENGTH, code, length, this.buffer)
+        const message = this.handlePacket(offset + HEADER_LENGTH, code, length, buf)
         callback(message)
         offset += fullMessageLength
       } else {
@@ -155,6 +170,14 @@ export class Parser {
   }
 
   private handlePacket(offset: number, code: number, length: number, bytes: Buffer): BackendMessage {
+    // Fast path: DataRow is by far the most frequent message in a result set.
+    // Parse it directly from the buffer, bypassing the shared BufferReader so we
+    // avoid the per-field method-call + `this.offset` round-trips and the two
+    // `setBuffer` calls that bracket the switch below.
+    if (code === MessageCodes.DataRow) {
+      return this.parseDataRowMessage(bytes, offset, length)
+    }
+
     const { reader } = this
 
     // NOTE: This undesirably retains the buffer in `this.reader` if the `parse*Message` calls below throw. However, those should only throw in the case of a protocol error, which normally results in the reader being discarded.
@@ -186,9 +209,6 @@ export class Parser {
         break
       case MessageCodes.EmptyQuery:
         message = emptyQuery
-        break
-      case MessageCodes.DataRow:
-        message = parseDataRowMessage(reader)
         break
       case MessageCodes.CommandComplete:
         message = parseCommandCompleteMessage(reader)
@@ -237,6 +257,47 @@ export class Parser {
 
     message.length = length
     return message
+  }
+
+  // DataRow is the hottest message in any result set, so it's parsed directly
+  // from the buffer with local offset arithmetic (no BufferReader round-trips)
+  // and, when `reuseObjects` is set, into a recycled message + fields array.
+  private parseDataRowMessage(buffer: Buffer, offset: number, length: number): DataRowMessage {
+    const fieldCount = buffer.readInt16BE(offset)
+    offset += 2
+
+    let fields: any[]
+    if (this.reuseObjects) {
+      // reuse the backing array across rows of the same width (the common case);
+      // only reallocate when the column count changes (e.g. a new result set)
+      fields = this.reusableFields as any[]
+      if (fields === null || fields.length !== fieldCount) {
+        fields = this.reusableFields = new Array(fieldCount)
+      }
+    } else {
+      fields = new Array(fieldCount)
+    }
+
+    for (let i = 0; i < fieldCount; i++) {
+      const len = buffer.readInt32BE(offset)
+      offset += 4
+      // a -1 for length means the value of the field is null
+      if (len === -1) {
+        fields[i] = null
+      } else {
+        fields[i] = decodeUtf8(buffer, offset, offset + len)
+        offset += len
+      }
+    }
+
+    if (this.reuseObjects) {
+      const message = this.reusableDataRowMessage
+      message.length = length
+      message.fields = fields
+      message.fieldCount = fieldCount
+      return message
+    }
+    return new DataRowMessage(length, fields)
   }
 }
 
@@ -303,17 +364,6 @@ const parseParameterDescriptionMessage = (reader: BufferReader) => {
     message.dataTypeIDs[i] = reader.int32()
   }
   return message
-}
-
-const parseDataRowMessage = (reader: BufferReader) => {
-  const fieldCount = reader.int16()
-  const fields: any[] = new Array(fieldCount)
-  for (let i = 0; i < fieldCount; i++) {
-    const len = reader.int32()
-    // a -1 for length means the value of the field is null
-    fields[i] = len === -1 ? null : reader.string(len)
-  }
-  return new DataRowMessage(LATEINIT_LENGTH, fields)
 }
 
 const parseParameterStatusMessage = (reader: BufferReader) => {

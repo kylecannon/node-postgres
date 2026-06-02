@@ -2,7 +2,7 @@
 
 const EventEmitter = require('events').EventEmitter
 
-const { parse, serialize } = require('pg-protocol')
+const { Parser, serialize } = require('pg-protocol')
 const { getStream, getSecureStream } = require('./stream')
 
 const flushBuffer = serialize.flush()
@@ -26,10 +26,22 @@ class Connection extends EventEmitter {
     this.ssl = config.ssl || false
     this._ending = false
     this._emitMessage = false
+    // Cooperatively yield the event loop after this many bytes of result data
+    // have been parsed in one synchronous run, so a large result delivered as a
+    // burst of socket reads doesn't monopolize the loop for tens of ms. Queries
+    // whose total response is under this budget are never affected. Set to 0 to
+    // disable. Only used when the stream supports pause()/resume().
+    this._yieldEveryBytes = config.maxResultChunkBytes != null ? config.maxResultChunkBytes : 512 * 1024
     const self = this
+    this._parser = null
     this.on('newListener', function (eventName) {
       if (eventName === 'message') {
         self._emitMessage = true
+        // a 'message' listener may retain the message object, so we can no
+        // longer safely recycle DataRow messages/fields between rows
+        if (self._parser) {
+          self._parser.reuseObjects = false
+        }
       }
     })
   }
@@ -107,12 +119,55 @@ class Connection extends EventEmitter {
   }
 
   attachListeners(stream) {
-    parse(stream, (msg) => {
+    const parser = new Parser()
+    // Recycle DataRow message/fields objects to reduce GC pressure on large
+    // result sets. Safe because the message is fully consumed synchronously in
+    // the callback below (parseRow copies values out). It's disabled whenever a
+    // 'message' listener exists, since such a listener may retain the message.
+    parser.reuseObjects = !this._emitMessage
+    this._parser = parser
+
+    const onMessage = (msg) => {
       const eventName = msg.name === 'error' ? 'errorMessage' : msg.name
       if (this._emitMessage) {
         this.emit('message', msg)
       }
       this.emit(eventName, msg)
+    }
+
+    const yieldEveryBytes = this._yieldEveryBytes
+    const canYield = yieldEveryBytes > 0 && typeof stream.pause === 'function' && typeof stream.resume === 'function'
+
+    if (!canYield) {
+      stream.on('data', (buffer) => parser.parse(buffer, onMessage))
+      return
+    }
+
+    // Bound synchronous parse work per event-loop turn. We keep a running total
+    // of bytes parsed; once it crosses the budget within a single burst of
+    // socket reads we pause the stream and resume on the next tick, letting the
+    // loop run. A reset is scheduled at the tick boundary so small reads spread
+    // across separate ticks never accumulate toward the budget.
+    let bytesThisTurn = 0
+    let resetScheduled = false
+    const resume = () => {
+      if (!stream.destroyed) stream.resume()
+    }
+    const resetBytes = () => {
+      bytesThisTurn = 0
+      resetScheduled = false
+    }
+    stream.on('data', (buffer) => {
+      parser.parse(buffer, onMessage)
+      bytesThisTurn += buffer.length
+      if (bytesThisTurn >= yieldEveryBytes) {
+        bytesThisTurn = 0
+        stream.pause()
+        setImmediate(resume)
+      } else if (!resetScheduled) {
+        resetScheduled = true
+        setImmediate(resetBytes)
+      }
     })
   }
 

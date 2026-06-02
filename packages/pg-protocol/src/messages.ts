@@ -227,7 +227,11 @@ export class CommandCompleteMessage {
 }
 
 export class DataRowMessage {
-  public readonly fieldCount: number
+  // `fieldCount`/`fields`/`length` are mutable so the parser can optionally
+  // reuse a single DataRowMessage instance across rows (see Parser.reuseObjects)
+  // to avoid a per-row allocation. Reused instances are only valid until the
+  // next message is parsed.
+  public fieldCount: number
   public readonly name: MessageName = 'dataRow'
   constructor(
     public length: number,
