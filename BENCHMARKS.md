@@ -19,7 +19,7 @@ meaningful, not the raw figures.
 > **Drop-in:** every result below is from the *default* code path with **zero
 > API or behavior changes** — same rows, same types, same `Object.prototype`.
 > Just upgrade. (Binary mode is the one opt-in piece — see
-> [`BINARY.md`](./BINARY.md).)
+> [`BINARY.md`](packages/pg-protocol/bench/BINARY.md).)
 
 ---
 
@@ -83,7 +83,7 @@ instead of three string scans); the gain grows with parameter size.
 ## Binary protocol mode (opt-in, `{ binary: true }`)
 
 Binary is a **targeted** win, not a blanket one (full detail in
-[`BINARY.md`](./BINARY.md)):
+[`BINARY.md`](packages/pg-protocol/bench/BINARY.md)):
 
 | type | binary vs text CPU (e2e) | wire size |
 | --- | --- | --- |
