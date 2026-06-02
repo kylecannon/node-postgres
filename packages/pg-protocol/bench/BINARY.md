@@ -9,6 +9,10 @@ protocol so the `Bind` message can carry `result-format = binary`; the captured
 `RowDescription` then reports `format: 'binary'` per column and the replay
 harness drives the **same** `Parser` + `Result` path the real client uses.
 
+> **TL;DR:** `npm run bench:binary` from the repo root runs all of the below
+> (it auto-builds, auto-captures fixtures, and sets the DB + flags for you).
+> The individual scripts are documented here for when you want to tweak args.
+
 ## Scripts
 
 All read `binary-fixtures.json` (gitignored — capture it first):

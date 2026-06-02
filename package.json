@@ -17,7 +17,16 @@
     "docs:start": "cd docs && yarn dev",
     "pretest": "yarn build",
     "prepublish": "yarn build",
-    "lint": "eslint --cache 'packages/**/*.{js,ts,tsx}'"
+    "lint": "eslint --cache 'packages/**/*.{js,ts,tsx}'",
+    "bench": "node packages/pg-protocol/bench/run.js",
+    "bench:read": "node packages/pg-protocol/bench/run.js read",
+    "bench:write": "node packages/pg-protocol/bench/run.js write",
+    "bench:binary": "node packages/pg-protocol/bench/run.js binary",
+    "bench:pool": "node packages/pg-protocol/bench/run.js pool",
+    "bench:e2e": "node packages/pg-protocol/bench/run.js e2e",
+    "bench:ab": "node packages/pg-protocol/bench/run.js ab",
+    "bench:guard": "node packages/pg-protocol/bench/run.js guard",
+    "bench:all": "node packages/pg-protocol/bench/run.js all"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",
