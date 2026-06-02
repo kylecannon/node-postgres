@@ -273,7 +273,7 @@ describe('PgPacketStream', function () {
     length: 4,
   })
 
-  testForMessage(Buffer.from([0x6e, 0, 0, 0, 4]), {
+  testForMessage(buffers.noData(), {
     name: 'noData',
   })
 

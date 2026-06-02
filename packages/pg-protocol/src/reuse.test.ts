@@ -56,6 +56,35 @@ describe('Parser reuseObjects', function () {
     assert.deepEqual(rows, [['only'], ['a', 'b', 'c'], ['x']])
   })
 
+  it('reuses the same fields array for consecutive same-width rows, and a fresh one on width change', function () {
+    const parser = new Parser()
+    parser.reuseObjects = true
+    const buf = Buffer.concat([
+      buffers.dataRow(['a', '1']),
+      buffers.dataRow(['b', '2']), // same width -> same backing array
+      buffers.dataRow(['c', '2', '3']), // width change -> fresh array
+    ])
+    const fieldArrays: any[][] = []
+    parser.parse(buf, (msg) => {
+      if (msg.name === 'dataRow') fieldArrays.push((msg as DataRowMessage).fields)
+    })
+    assert.equal(fieldArrays.length, 3)
+    assert.strictEqual(fieldArrays[0], fieldArrays[1], 'same-width rows share the recycled fields array')
+    assert.notStrictEqual(fieldArrays[1], fieldArrays[2], 'a column-count change allocates a fresh fields array')
+  })
+
+  it('sets DataRowMessage.length correctly on the recycled (reuse-on) path', function () {
+    const parser = new Parser()
+    parser.reuseObjects = true
+    const lengths: number[] = []
+    parser.parse(buffers.dataRow(['!']), (msg) => {
+      if (msg.name === 'dataRow') lengths.push((msg as DataRowMessage).length)
+    })
+    // body = int16 fieldCount (2) + int32 len (4) + 1 byte payload = 7, plus the
+    // 4-byte length field itself = 11, matching the non-reuse constructor path.
+    assert.deepEqual(lengths, [11])
+  })
+
   it('is correct when messages are split across chunk boundaries', function () {
     const parser = new Parser()
     parser.reuseObjects = true
