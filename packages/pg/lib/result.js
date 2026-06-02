@@ -69,23 +69,24 @@ function compileObjectRowBuilder(fieldDescriptions) {
   return new Function('d', 'p', src)
 }
 
-// Object-mode builders depend on column names + formats (parsers are passed at
-// call time). Compiling costs ~5us, which only pays off past ~18 rows, so for
-// small result sets we'd lose CPU per query. Real apps run the same queries
-// repeatedly, so cache by a collision-free signature and amortize the compile
-// to ~zero. The cache is bounded to avoid unbounded growth from dynamic SQL;
-// once full we simply stop caching new shapes (they still compile, just aren't
-// retained).
+// Object-mode builders depend only on the column names: the generated body
+// applies the per-column parser `p[i]` verbatim for both text and binary (the
+// raw value is already a string or Buffer), and `p` is passed at call time, so
+// the same builder serves a given name set regardless of column formats.
+// Compiling costs ~5us, which only pays off past ~18 rows, so for small result
+// sets we'd lose CPU per query. Real apps run the same queries repeatedly, so
+// cache by a collision-free signature and amortize the compile to ~zero. The
+// cache is bounded to avoid unbounded growth from dynamic SQL; once full we
+// simply stop caching new shapes (they still compile, just aren't retained).
 const MAX_OBJECT_ROW_BUILDERS = 1000
 const objectRowBuilderCache = new Map()
 function getObjectRowBuilder(fieldDescriptions) {
   // `JSON.stringify(name)` is always quote-delimited and escapes embedded
-  // quotes, so `"name":0;` segments are unambiguous -> the signature is
-  // injective (distinct name/format sequences never collide).
+  // quotes, so the concatenated `"name"` segments are unambiguous -> the
+  // signature is injective (distinct name sequences never collide).
   let sig = ''
   for (let i = 0; i < fieldDescriptions.length; i++) {
-    const desc = fieldDescriptions[i]
-    sig += JSON.stringify(desc.name) + (desc.format === 'binary' ? ':1;' : ':0;')
+    sig += JSON.stringify(fieldDescriptions[i].name)
   }
   let builder = objectRowBuilderCache.get(sig)
   if (builder === undefined) {
