@@ -37,6 +37,14 @@ class Query extends EventEmitter {
       return true
     }
 
+    // binary result format can only be requested via the extended protocol
+    // (the Bind message carries the result-format codes); the simple query
+    // path has no way to ask for it. Force preparation so `binary: true` is
+    // honored even for value-less queries.
+    if (this.binary) {
+      return true
+    }
+
     // named queries must always be prepared
     if (this.name) {
       return true
