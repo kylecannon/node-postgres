@@ -13,9 +13,6 @@ export const decodeUtf8: (buffer: Buffer, start: number, end: number) => string 
 export class BufferReader {
   private buffer: Buffer = Buffer.allocUnsafe(0)
 
-  // TODO(bmc): support non-utf8 encoding?
-  private encoding: BufferEncoding = 'utf-8'
-
   constructor(private offset: number = 0) {}
 
   public setBuffer(offset: number, buffer: Buffer): void {

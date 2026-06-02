@@ -259,10 +259,6 @@ export class Parser {
     return message
   }
 
-  // Capture the per-column result formats from the latest RowDescription so the
-  // following DataRows know which columns arrive as binary bytes. Reuses the
-  // backing Int8Array when the field count matches to avoid a per-query alloc
-  // (same pattern as `reusableFields`).
   // DataRow is the hottest message in any result set, so it's parsed directly
   // from the buffer with local offset arithmetic (no BufferReader round-trips)
   // and, when `reuseObjects` is set, into a recycled message + fields array.
