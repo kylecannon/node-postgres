@@ -1,54 +1,75 @@
 #!/bin/zsh
-# Definitive baseline-vs-optimized A/B across ALL benchmarks, same machine,
-# back-to-back. "baseline" = pristine master (every source change stashed).
-# Run from repo root with PG env set.
+# Commit-based A/B: original base code (the branch point with master) vs the
+# optimized HEAD, across the full bench suite. Reverts only the shipping source
+# files our branch changed, runs the suite, then restores HEAD. A trap restores
+# HEAD even on error so the tree is never left reverted. Run from repo root.
 set -e
 ROOT=/Volumes/Development/node-postgres
 PROTO=$ROOT/packages/pg-protocol
 PG=$ROOT/packages/pg
-STASH_PATHS=(packages/pg-protocol/src packages/pg/lib/connection.js packages/pg/lib/result.js)
+cd $ROOT
 
-run_suite() {  # $1 = label (opt|base)
-  local tag=$1
-  (cd $PROTO && npx tsc >/dev/null 2>&1)
-  echo "  [$tag] throughput (replay, tinybench)..."
-  (cd $PROTO && node bench/replay-bench.js all both 2>&1) > /tmp/ab_${tag}_replay.txt
-  echo "  [$tag] GC (gc-bench, object mode)..."
-  ( cd $PROTO && BENCH_TARGET_ROWS=3000000 node --expose-gc bench/gc-bench.js seq object 2>&1
-    BENCH_TARGET_ROWS=3000000 node --expose-gc bench/gc-bench.js users object 2>&1
-    BENCH_TARGET_ROWS=3000000 node --expose-gc bench/gc-bench.js events object 2>&1 ) > /tmp/ab_${tag}_gc.txt
-  echo "  [$tag] large-result e2e (500k rows)..."
-  (cd $PG && node --expose-gc bench-large-result.js 500000 1000 2>&1) > /tmp/ab_${tag}_large.txt
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+  echo "working tree has uncommitted tracked changes — commit/stash them first." >&2
+  exit 1
+fi
+
+BASE=$(git merge-base HEAD master)
+echo "BASE (original) = $BASE   OPTIMIZED = $(git rev-parse --short HEAD)"
+
+# shipping source files our branch changed (exclude bench scripts + test files)
+SRC=($(git diff --name-only $BASE HEAD -- packages/pg-protocol/src packages/pg/lib ':!*.test.ts'))
+TMP=$(mktemp -d)
+
+restore() {
+  git checkout -q HEAD -- ${SRC[@]} 2>/dev/null || true
+  mv $TMP/*.test.ts $PROTO/src/ 2>/dev/null || true
+  (cd $PROTO && rm -f tsconfig.tsbuildinfo && npx tsc >/dev/null 2>&1) || true
+}
+trap restore EXIT
+
+suite() {  # $1 = label
+  local t=$1
+  (cd $PROTO && rm -f tsconfig.tsbuildinfo && npx tsc >/dev/null 2>&1)
+  (cd $PROTO && node bench/replay-bench.js all both) >/tmp/ab_${t}_replay.txt 2>&1
+  ( cd $PROTO
+    BENCH_TARGET_ROWS=3000000 node --expose-gc bench/gc-bench.js seq object
+    BENCH_TARGET_ROWS=3000000 node --expose-gc bench/gc-bench.js users object
+    BENCH_TARGET_ROWS=3000000 node --expose-gc bench/gc-bench.js mixed object ) >/tmp/ab_${t}_gc.txt 2>&1
+  (cd $PG && node bench-pool.js 100 40 10 5) >/tmp/ab_${t}_pool.txt 2>&1
+  (cd $PROTO && node bench/write-bench.js) >/tmp/ab_${t}_write.txt 2>&1
 }
 
-echo "### Measuring OPTIMIZED (working tree) ###"
-run_suite opt
+echo "### measuring OPTIMIZED (HEAD) ###"
+suite opt
 
-echo "### Stashing all source changes -> pristine master ###"
-cd $ROOT
-git stash push -u -- ${STASH_PATHS[@]} >/dev/null 2>&1
-echo "### Measuring BASELINE (master, no improvements) ###"
-run_suite base
+echo "### reverting source to BASE ###"
+mv $PROTO/src/*.test.ts $TMP/ 2>/dev/null || true   # tests reference new APIs; set aside
+git checkout -q $BASE -- ${SRC[@]}
+echo "### measuring BASELINE (original code) ###"
+suite base
 
-echo "### Restoring working tree ###"
-cd $ROOT
-git stash pop >/dev/null 2>&1
-(cd $PROTO && npx tsc >/dev/null 2>&1)
-rm -f $PROTO/tsconfig.tsbuildinfo
+restore
+trap - EXIT
+echo "### restored HEAD ###"
 
 echo ""
-echo "================ THROUGHPUT (Mrows/s, baseline -> optimized) ================"
+echo "================ PARSE THROUGHPUT — Mrows/s (base -> optimized) ================"
 node -e '
 const fs=require("fs")
 const p=f=>Object.fromEntries(fs.readFileSync(f,"utf8").trim().split("\n").filter(l=>l.includes("Mrows")).map(l=>{const m=l.match(/^(\S+)\s+([\d.]+) Mrows/);return [m[1],parseFloat(m[2])]}))
 const b=p("/tmp/ab_base_replay.txt"), o=p("/tmp/ab_opt_replay.txt")
-for(const k of Object.keys(o)){const d=(o[k]-b[k])/b[k]*100;console.log(k.padEnd(18),b[k].toFixed(3),"->",o[k].toFixed(3),"  "+(d>=0?"+":"")+d.toFixed(1)+"%")}
+for(const k of Object.keys(o)){const d=(o[k]-b[k])/b[k]*100;console.log(k.padEnd(18),b[k].toFixed(3).padStart(7),"->",o[k].toFixed(3).padStart(7),"  "+(d>=0?"+":"")+d.toFixed(1)+"%")}
 '
 echo ""
-echo "================ GC (object mode, baseline -> optimized) ================"
+echo "================ GC (object mode, 3M rows) ================"
 echo "-- BASELINE --"; cat /tmp/ab_base_gc.txt
 echo "-- OPTIMIZED --"; cat /tmp/ab_opt_gc.txt
 echo ""
-echo "================ LARGE RESULT e2e 500k (baseline vs optimized) ================"
-echo "-- BASELINE --"; cat /tmp/ab_base_large.txt
-echo "-- OPTIMIZED --"; cat /tmp/ab_opt_large.txt
+echo "================ REAL-WORLD POOL (100-row list query) ================"
+echo "BASELINE : $(cat /tmp/ab_base_pool.txt)"
+echo "OPTIMIZED: $(cat /tmp/ab_opt_pool.txt)"
+echo ""
+echo "================ WRITE PATH (bind) ================"
+echo "-- BASELINE --";  grep -E "bind|full" /tmp/ab_base_write.txt
+echo "-- OPTIMIZED --"; grep -E "bind|full" /tmp/ab_opt_write.txt
