@@ -3,6 +3,12 @@
 # optimized HEAD, across the full bench suite. Reverts only the shipping source
 # files our branch changed, runs the suite, then restores HEAD. A trap restores
 # HEAD even on error so the tree is never left reverted. Run from repo root.
+#
+# NOTE: this is PHASE-SEPARATED (all-optimized, then all-base). On a thermally
+# noisy laptop that can distort a small (<~10%) delta by a few points — trust it
+# for direction and big effects. For accurate small deltas use ALTERNATING
+# sampling (opt, base, opt, base, …) as in packages/pg-pool/bench/ab.sh; the
+# numbers in BENCHMARKS.md were re-verified that way.
 set -e
 ROOT=/Volumes/Development/node-postgres
 PROTO=$ROOT/packages/pg-protocol

@@ -1,21 +1,19 @@
 # Performance results — base vs optimized
 
 Before/after for the `kcannon/perf` branch: original base code (the branch point
-with `master`) vs the optimized `HEAD`. All numbers are a **controlled,
-back-to-back A/B on one machine** — the harness reverts the changed shipping
-source to the base commit, runs the suite, restores `HEAD`, and runs it again.
+with `master`) vs the optimized `HEAD`, on one machine.
 
-Reproduce the whole thing with one command (from the repo root):
-
-```sh
-npm run bench:ab
-```
+> **Measurement note (important):** a laptop's thermal drift (±several %) is
+> large enough to distort a phase-separated A/B (run all-optimized, then
+> all-base) — early numbers measured that way came out a few points high. The
+> deltas below are the **median of alternating samples** (optimized, base,
+> optimized, base, … swapping prebuilt artifacts each round), which cancels the
+> drift. `npm run bench:ab` is the quick (phase-separated) view; trust it for
+> direction and big effects, not the last few points of a small one.
 
 Throughput uses [tinybench](https://github.com/tinylibs/tinybench) (thousands of
-samples, relative margin of error shown). Numbers are representative, not
-absolute — a laptop is thermally noisy, so only the back-to-back deltas are
-meaningful, not the raw figures. The **Δ** column is the improvement (↑ = faster /
-higher is better, ↓ = lower is better).
+samples). Raw figures are machine-specific; the **Δ** column is the improvement
+(↑ = higher is better, ↓ = lower is better).
 
 > **Drop-in:** every result below is from the *default* code path with **zero
 > API or behavior changes** — same rows, same types, same `Object.prototype`.
@@ -27,27 +25,27 @@ higher is better, ↓ = lower is better).
 
 | fixture | base | optimized | Δ |
 | --- | ---: | ---: | ---: |
-| `pg_type` (12 cols) | 0.993 | 1.339 | **+35%** |
-| `seq` (1 int col) | 7.636 | 9.536 | +25% |
-| `mixed` (5 cols) | 1.257 | 1.483 | +18% |
-| `users` (uuid/jsonb/ts/numeric) | 0.497 | 0.617 | +24% |
-| `orders` (numerics/enum/jsonb) | 0.667 | 0.885 | **+33%** |
-| `wide` (60 cols) | 0.154 | 0.271 | **+76%** |
-| `null_heavy` (16 cols, ~85% null) | 1.650 | 4.630 | **+181%** |
-| `events` (50k rows, jsonb) | 0.868 | 1.063 | +23% |
+| `pg_type` (12 cols) | 1.001 | 1.308 | **+31%** |
+| `seq` (1 int col) | 7.526 | 8.601 | +14% |
+| `mixed` (5 cols) | 1.243 | 1.438 | +16% |
+| `users` (uuid/jsonb/ts/numeric) | 0.505 | 0.601 | +19% |
+| `orders` (numerics/enum/jsonb) | 0.672 | 0.874 | **+30%** |
+| `wide` (60 cols) | 0.155 | 0.268 | **+73%** |
+| `null_heavy` (16 cols, ~85% null) | 1.662 | 4.362 | **+162%** |
+| `events` (50k rows, jsonb) | 0.879 | 1.036 | +18% |
 
 ## Parse throughput — array mode, Mrows/s ↑
 
 | fixture | base | optimized | Δ |
 | --- | ---: | ---: | ---: |
-| `pg_type` | 1.103 | 1.340 | +22% |
-| `seq` | 8.378 | 9.404 | +12% |
-| `mixed` | 1.347 | 1.490 | +11% |
-| `users` | 0.528 | 0.599 | +13% |
-| `orders` | 0.787 | 0.889 | +13% |
-| `wide` | 0.224 | 0.272 | +21% |
-| `null_heavy` | 3.694 | 4.487 | +21% |
-| `events` | 0.974 | 1.045 | +7% |
+| `pg_type` | 1.117 | 1.343 | +20% |
+| `seq` | 8.317 | 9.349 | +12% |
+| `mixed` | 1.331 | 1.465 | +10% |
+| `users` | 0.540 | 0.589 | +9% |
+| `orders` | 0.791 | 0.885 | +12% |
+| `wide` | 0.225 | 0.266 | +19% |
+| `null_heavy` | 3.729 | 4.397 | +18% |
+| `events` | 0.982 | 1.030 | +5% |
 
 Object mode (the default) gains the most because the old per-row `{...spread}`
 was replaced by a compiled, shaped row builder — biggest where that overhead
@@ -99,10 +97,10 @@ most.
 
 | case | base | optimized | Δ |
 | --- | ---: | ---: | ---: |
-| `bind(2 small)` | 2.36 | 2.72 | +15% |
-| `bind(10 mixed)` | 0.90 | 1.12 | **+24%** |
-| `bind(unicode)` | 1.97 | 2.33 | +18% |
-| `full insert seq` | 1.51 | 1.66 | +10% |
+| `bind(2 small)` | 2.35 | 2.66 | +13% |
+| `bind(10 mixed)` | 0.90 | 1.09 | **+22%** |
+| `bind(unicode)` | 1.98 | 2.26 | +14% |
+| `full insert seq` | 1.50 | 1.62 | +8% |
 
 String parameters are now encoded in a single pass (one `Buffer.byteLength`
 instead of three string scans); the gain grows with parameter size.
