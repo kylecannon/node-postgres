@@ -220,16 +220,17 @@ class Result {
 
     this._prebuiltEmptyResultObject = { ...row }
 
-    // Compile a per-shape row builder. Falls back to the interpreted path when
-    // code generation is forbidden (sandbox) or the shape can't be compiled.
+    // Compile a per-shape row builder. Falls back to the interpreted path (left
+    // as null) when code generation is forbidden (sandbox), the shape can't be
+    // compiled (a "__proto__" column), or there are no fields.
     this._rowBuilder = null
     if (canCompile && fieldDescriptions.length) {
       try {
-        this._rowBuilder = this.rowAsArray
-          ? getArrayRowBuilder(fieldDescriptions.length)
-          : hasProtoField
-          ? null
-          : getObjectRowBuilder(fieldDescriptions)
+        if (this.rowAsArray) {
+          this._rowBuilder = getArrayRowBuilder(fieldDescriptions.length)
+        } else if (!hasProtoField) {
+          this._rowBuilder = getObjectRowBuilder(fieldDescriptions)
+        }
       } catch (e) {
         this._rowBuilder = null
       }
