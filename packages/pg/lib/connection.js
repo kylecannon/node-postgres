@@ -26,22 +26,22 @@ class Connection extends EventEmitter {
     this.ssl = config.ssl || false
     this._ending = false
     this._emitMessage = false
-    // Cooperatively yield the event loop after this many bytes of result data
-    // have been parsed in one synchronous run, so a large result delivered as a
-    // burst of socket reads doesn't monopolize the loop for tens of ms. Queries
-    // whose total response is under this budget are never affected. Set to 0 to
-    // disable. Only used when the stream supports pause()/resume().
-    this._yieldEveryBytes = config.maxResultChunkBytes != null ? config.maxResultChunkBytes : 512 * 1024
+    // Optionally yield the event loop after this many bytes of result data have
+    // been parsed in one synchronous run, so a large result delivered as a burst
+    // of socket reads doesn't monopolize the loop for tens of ms. Opt-in: the
+    // default of 0 disables it, so the default delivery path is byte-for-byte and
+    // tick-for-tick unchanged. Set `maxResultChunkBytes` (e.g. via
+    // `new Pool({ maxResultChunkBytes })`) to a positive byte budget to enable.
+    // Only used when the stream supports pause()/resume().
+    this._yieldEveryBytes = config.maxResultChunkBytes != null ? config.maxResultChunkBytes : 0
     const self = this
     this._parser = null
     this.on('newListener', function (eventName) {
       if (eventName === 'message') {
-        self._emitMessage = true
         // a 'message' listener may retain the message object, so we can no
         // longer safely recycle DataRow messages/fields between rows
-        if (self._parser) {
-          self._parser.reuseObjects = false
-        }
+        self._emitMessage = true
+        self._syncParserReuse()
       }
     })
   }
@@ -118,14 +118,21 @@ class Connection extends EventEmitter {
     })
   }
 
+  // Recycle DataRow message/fields objects to reduce GC pressure on large result
+  // sets. Safe because the message is fully consumed synchronously in the parse
+  // callback (parseRow copies values out); disabled whenever a 'message' listener
+  // exists, since such a listener may retain the message. Derives the flag from
+  // `_emitMessage` so the constructor hook and attachListeners share one rule.
+  _syncParserReuse() {
+    if (this._parser) {
+      this._parser.reuseObjects = !this._emitMessage
+    }
+  }
+
   attachListeners(stream) {
     const parser = new Parser()
-    // Recycle DataRow message/fields objects to reduce GC pressure on large
-    // result sets. Safe because the message is fully consumed synchronously in
-    // the callback below (parseRow copies values out). It's disabled whenever a
-    // 'message' listener exists, since such a listener may retain the message.
-    parser.reuseObjects = !this._emitMessage
     this._parser = parser
+    this._syncParserReuse()
 
     const onMessage = (msg) => {
       const eventName = msg.name === 'error' ? 'errorMessage' : msg.name

@@ -75,15 +75,19 @@ objects from `pg-types` dominate the garbage, so the win is smaller and noisier
 
 ## Event-loop responsiveness — max lag on a 1M-row result via `client.query` ↓
 
-| metric | base | optimized | Δ |
+| metric | base | optimized (`maxResultChunkBytes: 512 KB`) | Δ |
 | --- | ---: | ---: | ---: |
 | max event-loop lag | 21.8 ms | 5.1 ms | **−76%** |
 
 A large result arrives as a burst of socket reads; the base parser processed the
 whole burst synchronously and stalled the loop. The faster parser plus
-cooperative yielding (pause/resume after a byte budget, default 512 KB, tunable
-via `new Pool({ maxResultChunkBytes })`) keep the loop responsive. The awaited
-result is identical — only the delivery is spread across a few more ticks.
+**opt-in** cooperative yielding (pause/resume after a byte budget) keep the loop
+responsive. Yielding is **off by default** (`maxResultChunkBytes: 0`), so the
+default delivery path is unchanged; set `maxResultChunkBytes` (e.g. via
+`new Pool({ maxResultChunkBytes })` or `new Client({ maxResultChunkBytes })`) to
+a positive budget to enable it. The optimized figure above is measured with a
+512 KB budget. The awaited result is identical — only the delivery is spread
+across a few more ticks.
 
 ## Real-world Pool — `pool.query()`, ~100-row list query, 10 conns / 40 concurrent
 
@@ -185,9 +189,10 @@ parsing/GC wins above apply to every strategy.
 - `pg-protocol`: `utf8Slice` field decode, a DataRow fast-path that bypasses the
   `BufferReader`, recycled DataRow message/fields (lower GC), and single-pass
   string-parameter encoding.
-- `pg`: compiled per-shape row builders (object + array, cached) and cooperative
-  event-loop yielding for very large results
-  (`new Pool({ maxResultChunkBytes })`, default 512 KB).
+- `pg`: compiled per-shape row builders (object + array, cached) and opt-in
+  cooperative event-loop yielding for very large results
+  (`new Pool({ maxResultChunkBytes })`, **off by default** — set a positive
+  byte budget to enable).
 
 ## Verifying these numbers (`npm run bench:verify`)
 

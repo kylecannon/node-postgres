@@ -24,7 +24,10 @@ function lagMeter() {
 const N = parseInt(process.argv[2] || '200000', 10)
 
 async function main() {
-  const c = new pg.Client()
+  // Cooperative yielding is opt-in (default off = unchanged delivery); enable it
+  // here so this A/B measures the feature. On the base snapshot the option is
+  // simply ignored, so the comparison stays valid.
+  const c = new pg.Client({ maxResultChunkBytes: 512 * 1024 })
   await c.connect()
   await c.query({ text: 'SELECT * FROM generate_series(1,20000)', rowMode: 'array' })
   let best = Infinity
