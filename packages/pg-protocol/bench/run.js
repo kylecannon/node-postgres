@@ -83,15 +83,6 @@ const commands = {
     console.log('\n=== event-loop lag by strategy: accumulate vs stream vs cursor ===')
     node(['--expose-gc', pg('bench-large-result.js'), '500000', '1000'], PG)
   },
-  binary() {
-    ensureFixtures('binary-fixtures.json', 'capture-binary-fixtures.js')
-    console.log('\n=== binary vs text: throughput ===')
-    node([b('replay-bench-binary.js'), 'all', 'object'], PROTO)
-    console.log('\n=== binary vs text: GC ===')
-    node(['--expose-gc', b('gc-bench-binary.js'), 'all', 'object'], PROTO)
-    console.log('\n=== binary vs text: end-to-end ===')
-    node([pg('bench-binary.js'), '50000'], PG)
-  },
   pool(args) {
     console.log('\n=== real-world Pool + pool.query() ===')
     node([pg('bench-pool.js'), ...(args.length ? args : ['100', '40', '10', '5'])], PG)
@@ -110,12 +101,12 @@ const commands = {
   },
   capture() {
     node([b('capture-fixtures.js')], PROTO)
-    node([b('capture-binary-fixtures.js')], PROTO)
   },
   all() {
     this.read()
     this.write()
-    this.binary()
+    this.gc()
+    this.loop()
     this.pool([])
   },
 }
@@ -126,13 +117,12 @@ const help = `node bench/run.js <command> [args]   (or: npm run bench:<command>)
   write     serializer / write-path throughput + GC
   gc        GC pressure only — array + object, all fixtures
   loop      event-loop lag — large result + per-strategy (accumulate/stream/cursor)
-  binary    binary vs text — throughput, GC, end-to-end
   pool      real-world Pool + pool.query()   [rows conc poolMax secs]
   e2e       large-result strategies: accumulate vs stream vs cursor   [rows batch]
   ab        baseline (master) vs optimized A/B  (throughput, GC, lag, pool, write)
   guard     regression guard   (--update to (re)snapshot the baseline)
   capture   (re)capture all fixtures
-  all       read + write + binary + pool
+  all       read + write + gc + loop + pool
 
 Auto-builds pg-protocol and captures fixtures as needed. DB defaults to
 127.0.0.1:54399 (user/data, trust) — override with PGHOST/PGPORT/PGUSER/PGDATABASE.`

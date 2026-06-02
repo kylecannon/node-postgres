@@ -18,15 +18,13 @@ try {
 // allocating an empty object/array and filling it field-by-field in a loop.
 // V8 compiles the generated literal into a single shaped allocation with the
 // per-field stores inlined, which is several times faster than the interpreted
-// path. The builder is a pure function of (rowData `d`, parsers `p`)
-// so it captures nothing and can be garbage collected with the Result.
+// path. The builder is a pure function of (rowData `d`, parsers `p`) so it
+// captures nothing and can be garbage collected with the Result.
 //
-// `d[i]` is the raw field value: a string for text columns, a Buffer for binary
-// columns (the parser yields a copied Buffer for binary fields), or null for SQL
-// NULL. The per-column type parser `p[i]` (selected by format in addFields) is
-// applied verbatim, so binary columns get their Buffer passed straight to the
-// binary parser. Column names only ever appear via JSON.stringify, so arbitrary
-// DB-supplied names cannot inject code.
+// `d[i]` is the raw field value (a string, or null for SQL NULL). The per-column
+// type parser `p[i]` (selected by format in addFields) is applied to it. Column
+// names only ever appear via JSON.stringify, so arbitrary DB-supplied names
+// cannot inject code.
 function compileArrayRowBuilder(fieldCount) {
   let src = 'return ['
   for (let i = 0; i < fieldCount; i++) {
@@ -58,35 +56,35 @@ function compileObjectRowBuilder(fieldDescriptions) {
     if (i) src += ','
     const desc = fieldDescriptions[i]
     const key = JSON.stringify(desc.name)
-    // The raw field value `d[i]` is already a Buffer for binary columns and a
-    // string for text columns, so it is passed straight to the per-column type
-    // parser `p[i]` regardless of format. (`p[i]` is the binary parser for
-    // binary columns and the text parser for text columns, chosen in addFields.)
-    src += `${key}:d[${i}]===null?null:p[${i}](d[${i}])`
+    // Text columns pass the raw string straight to the parser; binary columns
+    // (requested via `binary: true`) re-wrap the value as a Buffer first, exactly
+    // as the interpreted path always has. `B` is Buffer, passed in at call time.
+    const value =
+      desc.format === 'binary' ? `d[${i}]===null?null:p[${i}](B.from(d[${i}]))` : `d[${i}]===null?null:p[${i}](d[${i}])`
+    src += `${key}:${value}`
   }
   src += '}'
 
-  return new Function('d', 'p', src)
+  return new Function('d', 'p', 'B', src)
 }
 
-// Object-mode builders depend only on the column names: the generated body
-// applies the per-column parser `p[i]` verbatim for both text and binary (the
-// raw value is already a string or Buffer), and `p` is passed at call time, so
-// the same builder serves a given name set regardless of column formats.
-// Compiling costs ~5us, which only pays off past ~18 rows, so for small result
-// sets we'd lose CPU per query. Real apps run the same queries repeatedly, so
-// cache by a collision-free signature and amortize the compile to ~zero. The
-// cache is bounded to avoid unbounded growth from dynamic SQL; once full we
-// simply stop caching new shapes (they still compile, just aren't retained).
+// Object-mode builders depend on the column names + per-column format (binary
+// columns generate an extra Buffer.from). `p` is passed at call time. Compiling
+// costs ~5us, which only pays off past ~18 rows, so for small result sets we'd
+// lose CPU per query. Real apps run the same queries repeatedly, so cache by a
+// collision-free signature and amortize the compile to ~zero. The cache is
+// bounded to avoid unbounded growth from dynamic SQL; once full we simply stop
+// caching new shapes (they still compile, just aren't retained).
 const MAX_OBJECT_ROW_BUILDERS = 1000
 const objectRowBuilderCache = new Map()
 function getObjectRowBuilder(fieldDescriptions) {
   // `JSON.stringify(name)` is always quote-delimited and escapes embedded
-  // quotes, so the concatenated `"name"` segments are unambiguous -> the
-  // signature is injective (distinct name sequences never collide).
+  // quotes, so the `"name":0;` segments are unambiguous -> the signature is
+  // injective (distinct name/format sequences never collide).
   let sig = ''
   for (let i = 0; i < fieldDescriptions.length; i++) {
-    sig += JSON.stringify(fieldDescriptions[i].name)
+    const desc = fieldDescriptions[i]
+    sig += JSON.stringify(desc.name) + (desc.format === 'binary' ? ':1;' : ':0;')
   }
   let builder = objectRowBuilderCache.get(sig)
   if (builder === undefined) {
@@ -165,7 +163,7 @@ class Result {
   parseRow(rowData) {
     const builder = this._rowBuilder
     if (builder !== null) {
-      return builder(rowData, this._parsers)
+      return builder(rowData, this._parsers, Buffer)
     }
     // interpreted fallback (sandboxed runtimes, or shapes we won't compile such
     // as a "__proto__" column).
@@ -175,10 +173,14 @@ class Result {
     const len = rowData.length
     for (let i = 0; i < len; i++) {
       const rawValue = rowData[i]
-      // The raw value is already a Buffer for binary columns and a string for
-      // text columns (the parser does the format-specific decode), so it is
-      // applied directly to the per-column type parser `parsers[i]`.
-      row[fields[i].name] = rawValue === null ? null : parsers[i](rawValue)
+      const field = fields[i]
+      if (rawValue !== null) {
+        // binary columns (requested via `binary: true`) are re-wrapped as a Buffer
+        const v = field.format === 'binary' ? Buffer.from(rawValue) : rawValue
+        row[field.name] = parsers[i](v)
+      } else {
+        row[field.name] = null
+      }
     }
     return row
   }
