@@ -102,7 +102,10 @@ class Pool extends EventEmitter {
     this._clients = []
     this._idle = []
     this._expired = new WeakSet()
+    // FIFO of waiting requests. Dequeued via a moving head index (O(1)) rather
+    // than Array#shift (O(n)); the prefix before the head is compacted lazily.
     this._pendingQueue = []
+    this._pendingHead = 0
     this._endCallback = undefined
     this.ending = false
     this.ended = false
@@ -148,7 +151,7 @@ class Pool extends EventEmitter {
     }
 
     // if we don't have any waiting, do nothing
-    if (!this._pendingQueue.length) {
+    if (this._pendingHead === this._pendingQueue.length) {
       this.log('no queued requests')
       return
     }
@@ -156,7 +159,18 @@ class Pool extends EventEmitter {
     if (!this._idle.length && this._isFull()) {
       return
     }
-    const pendingItem = this._pendingQueue.shift()
+    // dequeue from the head (O(1)); compact when the queue drains or the dead
+    // prefix grows past half the array
+    const pendingItem = this._pendingQueue[this._pendingHead]
+    this._pendingQueue[this._pendingHead] = undefined
+    this._pendingHead++
+    if (this._pendingHead === this._pendingQueue.length) {
+      this._pendingQueue.length = 0
+      this._pendingHead = 0
+    } else if (this._pendingHead > 64 && this._pendingHead * 2 > this._pendingQueue.length) {
+      this._pendingQueue = this._pendingQueue.slice(this._pendingHead)
+      this._pendingHead = 0
+    }
     if (this._idle.length) {
       const idleItem = this._idle.pop()
       clearTimeout(idleItem.timeoutId)
@@ -222,7 +236,8 @@ class Pool extends EventEmitter {
       const tid = setTimeout(() => {
         // remove the callback from pending waiters because
         // we're going to call it with a timeout error
-        removeWhere(this._pendingQueue, (i) => i.callback === queueCallback)
+        // `i` may be an emptied head slot (set to undefined on dequeue)
+        removeWhere(this._pendingQueue, (i) => i !== undefined && i.callback === queueCallback)
         pendingItem.timedOut = true
         response.callback(new Error('timeout exceeded when trying to connect'))
       }, this.options.connectionTimeoutMillis)
@@ -505,7 +520,7 @@ class Pool extends EventEmitter {
   }
 
   get waitingCount() {
-    return this._pendingQueue.length
+    return this._pendingQueue.length - this._pendingHead
   }
 
   get idleCount() {

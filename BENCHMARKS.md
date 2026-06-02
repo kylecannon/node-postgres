@@ -113,8 +113,13 @@ Isolates pg-pool's own per-query overhead (no real Postgres). The pool's
 per-query cost is floored by its promise-based API — `promisify` creates two
 promises per query (the result + a `.catch` that rewrites the stack), required
 for the tested async stack-trace feature — so that part can't shrink. The wins
-come from cutting the *other* per-query allocations: a `once`→`on` for the error
-listener (drops the onceWrapper allocation) and binding `_pulseQueue` once.
+come from cutting everything around it:
+
+- **`once`→`on`** for the per-query error listener — the query callback already
+  removes it and it self-guards, so `once`'s onceWrapper allocation was waste.
+- **O(1) pending dequeue** — a moving head index instead of `Array#shift` (O(n));
+  ~6% on its own at high concurrency where the wait queue is deep.
+- **bind `_pulseQueue` once** instead of a fresh closure/bound fn per acquire.
 
 | concurrency | base qps | optimized qps | Δ | GC/query |
 | --- | ---: | ---: | ---: | --- |
