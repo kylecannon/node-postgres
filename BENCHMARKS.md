@@ -182,6 +182,31 @@ parsing/GC wins above apply to every strategy.
   event-loop yielding for very large results
   (`new Pool({ maxResultChunkBytes })`, default 512 KB).
 
+## Verifying these numbers (`npm run bench:verify`)
+
+This is the harness that produced the deltas above and keeps them honest. It
+builds the optimized + base artifacts once, then **alternates** samples
+(opt, base, opt, base, …) so thermal drift cancels, and prints a **confidence
+verdict** per metric:
+
+- **reliable ↑** — every round agreed in direction and the delta clears the
+  round-to-round spread. Safe to quote.
+- **INCONCLUSIVE** — the delta is within the noise spread at this round count.
+  *Don't quote it* (raise the round count to resolve it).
+- **REGRESSION ↓** — a confident slowdown. `--guard` makes the run exit non-zero
+  on one (for CI).
+
+```sh
+npm run bench:verify            # 4 alternating rounds, all suites
+node packages/pg-protocol/bench/verify.js 6 replay   # more rounds / one suite
+node packages/pg-protocol/bench/verify.js 4 all --guard   # CI gate
+```
+
+Any number quoted in this file should be **reliable ↑** under `bench:verify`.
+The plain `npm run bench:*` scripts and `bench:ab` are the quick (phase-
+separated) view — fine for direction, but for a small effect only `bench:verify`
+is trustworthy.
+
 ## Reproducing individual suites
 
 ```sh
@@ -191,5 +216,5 @@ npm run bench:loop     # event-loop lag (large result + per-strategy)
 npm run bench:write    # write path
 npm run bench:pool     # real-world Pool
 npm run bench:big      # 500k rows, ~400MB result, multi-MB fields
-npm run bench:ab       # this whole base-vs-optimized comparison
+npm run bench:ab       # quick base-vs-optimized comparison (phase-separated)
 ```

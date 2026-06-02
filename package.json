@@ -28,6 +28,7 @@
     "bench:e2e": "node packages/pg-protocol/bench/run.js e2e",
     "bench:big": "node packages/pg-protocol/bench/run.js big",
     "bench:ab": "node packages/pg-protocol/bench/run.js ab",
+    "bench:verify": "node packages/pg-protocol/bench/verify.js",
     "bench:guard": "node packages/pg-protocol/bench/run.js guard",
     "bench:all": "node packages/pg-protocol/bench/run.js all"
   },
