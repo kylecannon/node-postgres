@@ -121,15 +121,25 @@ come from cutting everything around it:
   ~6% on its own at high concurrency where the wait queue is deep.
 - **bind `_pulseQueue` once** instead of a fresh closure/bound fn per acquire.
 
-| concurrency | base qps | optimized qps | Δ | GC/query |
-| --- | ---: | ---: | ---: | --- |
-| 5 (idle clients) | 2.08 M | 2.10 M | +1% | flat |
-| 50 (saturated) | 2.08 M | 2.16 M | +4% | flat |
-| 200 (high churn) | 1.96 M | 2.06 M | **+5–8%** | **−25%** (14.6 → 11.0 ns) |
+Measured with **alternating samples** (opt, base, opt, base, …) via
+`zsh packages/pg-pool/bench/ab.sh` — on a laptop the thermal drift between a
+separated "all-opt-then-all-base" run swamps an effect this size, so alternating
+is the only reliable read.
 
-The benefit scales with concurrency (more listener churn = more avoided
-allocations). In production the DB round-trip dwarfs pool overhead, so this is
-CPU/GC headroom under load rather than lower single-query latency.
+| concurrency | base qps | optimized qps | Δ |
+| --- | ---: | ---: | ---: |
+| 5 (idle clients) | 2.06 M | 2.14 M | +4% |
+| 50 (saturated) | 2.07 M | 2.20 M | +7% |
+| 200 (high churn) | 1.96 M | 2.15 M | **+10%** |
+
+The benefit scales with concurrency — the deeper wait queue makes the O(1)
+dequeue matter more, and more checkouts mean more avoided allocations. In
+production the DB round-trip dwarfs pool overhead, so this is CPU/GC headroom
+under load rather than lower single-query latency.
+
+Considered and rejected (kept simple): reusing the release closure across
+checkouts (no measurable gain over the listener fix), and collapsing the two
+promises in `promisify` (required for the tested async stack-trace feature).
 
 ## Large data — the big-boy results (`npm run bench:big`)
 
