@@ -107,6 +107,25 @@ most.
 String parameters are now encoded in a single pass (one `Buffer.byteLength`
 instead of three string scans); the gain grows with parameter size.
 
+## Connection pool overhead — `pool.query()` with a mock client (`npm run bench:pool-micro`)
+
+Isolates pg-pool's own per-query overhead (no real Postgres). The pool's
+per-query cost is floored by its promise-based API — `promisify` creates two
+promises per query (the result + a `.catch` that rewrites the stack), required
+for the tested async stack-trace feature — so that part can't shrink. The wins
+come from cutting the *other* per-query allocations: a `once`→`on` for the error
+listener (drops the onceWrapper allocation) and binding `_pulseQueue` once.
+
+| concurrency | base qps | optimized qps | Δ | GC/query |
+| --- | ---: | ---: | ---: | --- |
+| 5 (idle clients) | 2.08 M | 2.10 M | +1% | flat |
+| 50 (saturated) | 2.08 M | 2.16 M | +4% | flat |
+| 200 (high churn) | 1.96 M | 2.06 M | **+5–8%** | **−25%** (14.6 → 11.0 ns) |
+
+The benefit scales with concurrency (more listener churn = more avoided
+allocations). In production the DB round-trip dwarfs pool overhead, so this is
+CPU/GC headroom under load rather than lower single-query latency.
+
 ## Large data — the big-boy results (`npm run bench:big`)
 
 These compare **strategies** for one huge result. The Δ column is the peak-memory

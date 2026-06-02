@@ -24,6 +24,7 @@
     "bench:gc": "node packages/pg-protocol/bench/run.js gc",
     "bench:loop": "node packages/pg-protocol/bench/run.js loop",
     "bench:pool": "node packages/pg-protocol/bench/run.js pool",
+    "bench:pool-micro": "node --expose-gc packages/pg-pool/bench/pool-micro.js",
     "bench:e2e": "node packages/pg-protocol/bench/run.js e2e",
     "bench:big": "node packages/pg-protocol/bench/run.js big",
     "bench:ab": "node packages/pg-protocol/bench/run.js ab",
