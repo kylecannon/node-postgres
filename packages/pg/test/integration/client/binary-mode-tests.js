@@ -187,38 +187,34 @@ suite.test('binary: true forces the extended protocol for value-less queries', a
   }
 })
 
-// Known divergences (NOT fixed here — they live in pg-types, not pg/pg-protocol).
-// This test documents and pins the *current* binary-mode behavior of types that
-// pg-types either lacks a binary parser for or decodes differently than text, so
-// callers know which types are unsafe to request binary and so a future pg-types
-// fix surfaces here. bytea is intentionally NOT in this list: pg installs a
-// binary passthrough for it (see type-overrides.js) so it round-trips correctly.
+// uuid/json/jsonb have no binary parser in pg-types (noParse would corrupt the
+// bytes), so pg installs correct binary decoders in type-overrides.js. Verify
+// they now round-trip to the same JS values as text mode.
+suite.test('uuid/json/jsonb round-trip in binary mode (pg-side parsers)', async () => {
+  const client = helper.client()
+  try {
+    const sql = `select 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid as u,
+      '{"k":1,"a":[1,2]}'::json as j, '{"k":1,"a":[1,2]}'::jsonb as jb,
+      null::uuid as nu, null::jsonb as njb`
+    const t = (await client.query({ text: sql })).rows[0]
+    const b = (await client.query({ text: sql, binary: true })).rows[0]
+    assert.strictEqual(b.u, t.u)
+    assert.strictEqual(b.u, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11')
+    assert.deepStrictEqual(b.j, t.j)
+    assert.deepStrictEqual(b.j, { k: 1, a: [1, 2] })
+    assert.deepStrictEqual(b.jb, t.jb)
+    assert.strictEqual(b.nu, null)
+    assert.strictEqual(b.njb, null)
+  } finally {
+    await client.end()
+  }
+})
+
+// Remaining divergences that DO live in pg-types (not pg/pg-protocol): pin them
+// so a future pg-types fix surfaces here.
 suite.test('documents known binary/text divergences from pg-types', async () => {
   const client = helper.client()
   try {
-    // json: text mode JSON.parses to an object; binary mode returns the raw utf8
-    // string (pg-types has no binary json parser -> noParse stringifies the bytes).
-    const jt = (await client.query({ text: `select '{"a":1}'::json as v` })).rows[0].v
-    const jb = (await client.query({ text: `select '{"a":1}'::json as v`, binary: true })).rows[0].v
-    assert.deepStrictEqual(jt, { a: 1 })
-    assert.strictEqual(typeof jb, 'string', 'json binary currently returns a string (pg-types gap)')
-
-    // jsonb: binary wire format has a leading 0x01 version byte before the json
-    // text; pg-types has no binary jsonb parser, so the result is a string that
-    // begins with that stray version byte.
-    const bt = (await client.query({ text: `select '{"a":1}'::jsonb as v` })).rows[0].v
-    const bb = (await client.query({ text: `select '{"a":1}'::jsonb as v`, binary: true })).rows[0].v
-    assert.deepStrictEqual(bt, { a: 1 })
-    assert.strictEqual(typeof bb, 'string', 'jsonb binary currently returns a string (pg-types gap)')
-
-    // uuid: 16 raw bytes in binary; pg-types has no binary uuid parser, so the
-    // string is garbage rather than the dashed text form.
-    const ut = (await client.query({ text: `select 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid as v` })).rows[0].v
-    const ub = (await client.query({ text: `select 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid as v`, binary: true }))
-      .rows[0].v
-    assert.strictEqual(ut, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11')
-    assert.notStrictEqual(ub, ut, 'uuid binary does not match text (pg-types gap)')
-
     // float8 NaN: pg-types parseFloat64 decodes the all-ones exponent as Infinity.
     const ft = (await client.query({ text: `select 'NaN'::float8 as v` })).rows[0].v
     const fb = (await client.query({ text: `select 'NaN'::float8 as v`, binary: true })).rows[0].v

@@ -12,11 +12,46 @@ const types = require('pg-types')
 const BYTEA_OID = 17
 const byteaBinaryPassthrough = (buffer) => buffer
 
+// pg-types ships no binary parser for uuid/json/jsonb either, so without these
+// `getTypeParser(oid, 'binary')` falls back to `noParse` (String(buffer)) and
+// returns a corrupted string. We install correct binary decoders so `binary:
+// true` yields the same JS values as text mode. All remain user-overridable via
+// `client.setTypeParser(oid, 'binary', fn)`.
+const UUID_OID = 2950
+const JSON_OID = 114
+const JSONB_OID = 3802
+
+// uuid binary wire format is the raw 16 bytes; format them as the canonical
+// 8-4-4-4-12 lowercase-hex string (matching text mode) — 16B on the wire vs 36
+// chars of text.
+const uuidBinaryParser = (buffer) => {
+  const hex = buffer.toString('hex')
+  return (
+    hex.slice(0, 8) +
+    '-' +
+    hex.slice(8, 12) +
+    '-' +
+    hex.slice(12, 16) +
+    '-' +
+    hex.slice(16, 20) +
+    '-' +
+    hex.slice(20, 32)
+  )
+}
+// json binary wire format is just the UTF-8 JSON text.
+const jsonBinaryParser = (buffer) => JSON.parse(buffer.toString('utf8'))
+// jsonb binary wire format is a 1-byte version header (always 0x01) followed by
+// the UTF-8 JSON text.
+const jsonbBinaryParser = (buffer) => JSON.parse(buffer.toString('utf8', 1))
+
 function TypeOverrides(userTypes) {
   this._types = userTypes || types
   this.text = {}
   this.binary = {
     [BYTEA_OID]: byteaBinaryPassthrough,
+    [UUID_OID]: uuidBinaryParser,
+    [JSON_OID]: jsonBinaryParser,
+    [JSONB_OID]: jsonbBinaryParser,
   }
 }
 
